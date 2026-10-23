@@ -1,0 +1,44 @@
+# ============================================================
+# .gitignore – Files to EXCLUDE from GitHub upload
+# ============================================================
+
+# Python cache – never upload
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.pyc
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# Secrets & API keys – NEVER upload
+.env
+secrets.toml
+.streamlit/secrets.toml
+
+# Large unnecessary files in this project
+OneDrive_2026-10-22.zip
+Study-on-Compliance-of-Financial-Reporting-Requirements-IND-AS-Framework.pdf
+"IND AS & other laws"/
+
+# Personal notes / prompts
+Prompt.txt
+Link for recent article on significant achievment.docx
+
+# Test artifacts
+tests/__pycache__/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
