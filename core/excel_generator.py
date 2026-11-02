@@ -106,6 +106,8 @@ class ExcelReportGenerator:
             "Applicable accounting standard, Schedule III requirement or statutory provision",
             "Recommended action",
             "Status of the issue",
+            "Risk",
+            "Requirement as per the Standard (source text)",
         ]
 
         header_row = 4
@@ -115,6 +117,7 @@ class ExcelReportGenerator:
             cell.font = cls.HEADER_FONT
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = cls.HEADER_BORDER
+        ws_issues.freeze_panes = ws_issues.cell(row=header_row + 1, column=3)
 
         # Data Rows
         current_row = header_row + 1
@@ -127,22 +130,32 @@ class ExcelReportGenerator:
             c6 = ws_issues.cell(row=current_row, column=6, value=item.get("statutory_ref", item.get("technical_ref", "Reference Verification Required")))
             c7 = ws_issues.cell(row=current_row, column=7, value=item.get("action", item.get("recommended_action", "")))
             c8 = ws_issues.cell(row=current_row, column=8, value=item.get("status", "Action Required"))
+            c9 = ws_issues.cell(row=current_row, column=9, value=item.get("risk", "Medium"))
+            c10 = ws_issues.cell(row=current_row, column=10, value=item.get("requirement_text", "")[:3000])
 
-            for c in [c1, c2, c3, c4, c5, c6, c7, c8]:
+            for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10]:
                 c.font = cls.REGULAR_FONT
                 c.border = cls.THIN_BORDER
                 c.alignment = Alignment(vertical="top", wrap_text=True)
 
             c1.alignment = Alignment(horizontal="center", vertical="top")
             c8.alignment = Alignment(horizontal="center", vertical="top")
+            c9.alignment = Alignment(horizontal="center", vertical="top")
+            risk_val = str(item.get("risk", "Medium"))
+            c9.fill, c9.font = {
+                "High": (cls.HIGH_RISK_FILL, cls.HIGH_RISK_FONT),
+                "Medium": (cls.MED_RISK_FILL, cls.MED_RISK_FONT),
+            }.get(risk_val, (cls.LOW_RISK_FILL, cls.LOW_RISK_FONT))
 
             # Soft yellow highlight on Suggested Correction column
             c5.fill = cls.SOFT_YELLOW_FILL
 
             current_row += 1
 
+        ws_issues.auto_filter.ref = f"A{header_row}:J{max(current_row - 1, header_row)}"
+
         # Column widths
-        widths = {1: 14, 2: 24, 3: 38, 4: 34, 5: 38, 6: 34, 7: 32, 8: 18}
+        widths = {1: 14, 2: 24, 3: 38, 4: 34, 5: 38, 6: 34, 7: 32, 8: 18, 9: 10, 10: 60}
         for col_i, w in widths.items():
             ws_issues.column_dimensions[get_column_letter(col_i)].width = w
         ws_issues.row_dimensions[header_row].height = 36

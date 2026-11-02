@@ -11,6 +11,7 @@ import os
 import re
 from typing import Dict, Any, List, Optional
 import requests
+from core.knowledge_base import KnowledgeBase
 
 
 class AIAnalyzer:
@@ -147,15 +148,23 @@ Entity Profile:
 - Statement Type: {profile.get('statement_type')}
 - Review Mode: {review_mode}
 
+Authoritative requirement text (from the notified standards in the reviewer's knowledge base).
+Cite ONLY paragraphs that appear here or that you are certain of; otherwise write "Reference Verification Required":
+\"\"\"
+{KnowledgeBase.retrieval_context(text_extracts, profile.get('framework', ''))}
+\"\"\"
+
 Financial Statements & Notes Extracts:
 \"\"\"
 {text_extracts[:20000]}
 \"\"\"
 
 Analyze the disclosures above against Ind AS / AS, Schedule III, and CARO 2020.
+Write each observation as a reviewing Chartered Accountant would: what is presented, what the requirement is, and the exact disclosure / correction needed.
+Do not report a matter that is already adequately disclosed in the extracts.
 Output ONLY a valid JSON list of findings.
 """
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [
