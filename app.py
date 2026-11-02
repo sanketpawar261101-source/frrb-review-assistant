@@ -5,6 +5,7 @@ Reviews draft and published financial statements, identifies potential non-compl
 and generates audit-grade Excel reports with yellow cell highlighting.
 """
 
+import gc
 import html
 import importlib
 import os
@@ -511,7 +512,12 @@ if results:
         if not source_bytes or not DraftFSMarker.is_supported(current_name):
             st.warning("Draft Financial Statements output needs the draft statements uploaded as an Excel workbook (.xlsx / .xlsm) so that its format can be retained. Please upload the Excel draft, or use the Review Points Sheet view.")
         else:
-            marked_bytes, fs_changes = DraftFSMarker.mark(source_bytes, current_name, results["issues"])
+            # built once per review and kept with the results (rebuilding on every rerun exhausted the hosted app's memory)
+            if "_marked" not in results:
+                marked, changes = DraftFSMarker.mark(source_bytes, current_name, results["issues"])
+                results["_marked"] = (marked, changes, DraftFSMarker.preview(marked, source_bytes))
+                gc.collect()
+            marked_bytes, fs_changes, preview = results["_marked"]
             base_name = os.path.splitext(current_name)[0]
             ext = os.path.splitext(current_name)[1].lower()
 
@@ -532,7 +538,6 @@ if results:
                 )
 
             st.markdown("---")
-            preview = DraftFSMarker.preview(marked_bytes, source_bytes)
             sheet_tabs = st.tabs([f"📄 {name}" for name in preview] + ["📋 Yellow Changes Index"])
 
             for tab, (sheet_name, data) in zip(sheet_tabs, preview.items()):
@@ -586,6 +591,10 @@ if results:
                 <div class="metric-label">{n}</div></div>""", unsafe_allow_html=True)
         st.markdown("<br/>", unsafe_allow_html=True)
 
+        if "_tr_xlsx" not in results:
+            results["_tr_xlsx"] = ExcelReportGenerator.generate_tr_workbook(
+                results["issues"], results.get("checks", []), prof,
+                entity_name=os.path.splitext(st.session_state.get("current_filename") or "")[0])
         rp_col1, rp_col2 = st.columns([2, 1])
         with rp_col1:
             st.write("**Downloadable Review Points Sheet** in the FRRB Technical Review layout (Title, Sub Title, View of the Reviewer, "
@@ -593,8 +602,7 @@ if results:
         with rp_col2:
             st.download_button(
                 label="⬇️ Download Review Points Sheet (.xlsx)",
-                data=ExcelReportGenerator.generate_tr_workbook(results["issues"], results.get("checks", []), prof,
-                                                              entity_name=os.path.splitext(st.session_state.get("current_filename") or "")[0]),
+                data=results["_tr_xlsx"],
                 file_name=f"Financial_Reporting_Review_Points_{str(prof.get('financial_year', financial_year)).replace(' ', '_')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
