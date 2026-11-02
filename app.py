@@ -5,6 +5,7 @@ Reviews draft and published financial statements, identifies potential non-compl
 and generates audit-grade Excel reports with yellow cell highlighting.
 """
 
+import html
 import os
 import streamlit as st
 import pandas as pd
@@ -14,7 +15,8 @@ from core.pdf_extractor import PDFExtractor
 from core.rules_engine import ComplianceEngine
 from core.ai_analyzer import AIAnalyzer
 from core.excel_generator import ExcelReportGenerator
-from core.schedule_iii_viewer import ScheduleIIIViewer
+from core.knowledge_base import KnowledgeBase
+from core.fs_marker import DraftFSMarker
 
 
 # Page configuration
@@ -267,51 +269,25 @@ else:
 # -----------------------------------------------------------------------------
 st.markdown("### 2. Document Ingestion (Excel)")
 
-# Direct Sample Selection (No Expander)
-st.markdown("#### 📁 Samples")
-sample_choice = st.radio(
-    "Select Sample",
+st.markdown("#### 📁 Output Required")
+output_choice = st.radio(
+    "Select Output",
     [
         "Financial Reporting Review Points Sheet",
         "Draft Financial Statements (Yellow Highlights)",
     ],
-    index=0 if st.session_state.get("selected_sample_type") != "Draft Financial Statements (Yellow Highlights)" else 1,
+    index=0 if st.session_state.get("output_choice") != "Draft Financial Statements (Yellow Highlights)" else 1,
     help="Option 1: Financial Reporting Review Points Sheet | Option 2: Draft Financial Statements – incorporate the relevant disclosures into the draft financial statements and highlight all additions or modifications in yellow."
 )
+st.session_state.output_choice = output_choice
 
-if sample_choice == "Financial Reporting Review Points Sheet":
+if output_choice == "Financial Reporting Review Points Sheet":
     st.caption("📋 **Financial Reporting Review Points Sheet:** Identifies reporting non-compliances, Schedule III gaps, CARO red flags, and auditor remarks.")
 else:
-    st.caption("📝 **Draft Financial Statements (Yellow Highlights):** Draft Financial Statements – incorporate the relevant disclosures into the draft financial statements and highlight all additions or modifications in yellow.")
-
-sample_col1, sample_col2 = st.columns([1, 2])
-with sample_col1:
-    load_sample_btn = st.button("📥 Load Selected Sample", type="secondary", use_container_width=True)
-
-# Process Loaded Sample
-if load_sample_btn:
-    st.session_state.selected_sample_type = sample_choice
-    if sample_choice == "Financial Reporting Review Points Sheet":
-        sample_path = "sample_data/Sample_Review_Points_Sheet.xlsx"
-        if not os.path.exists(sample_path):
-            sample_path = "sample_data/Sample_Annual_Report_Option_B.xlsx"
-        st.session_state.review_mode = "Option B"
-    else:
-        sample_path = "sample_data/Sample_Draft_FS_Yellow_Modifications.xlsx"
-        if not os.path.exists(sample_path):
-            sample_path = "sample_data/Sample_Draft_FS_Option_A.xlsx"
-        st.session_state.review_mode = "Option A"
-
-    if os.path.exists(sample_path):
-        with open(sample_path, "rb") as f:
-            file_bytes = f.read()
-        st.session_state.extracted_doc = PDFExtractor.extract_from_bytes(file_bytes, filename=os.path.basename(sample_path))
-        st.session_state.current_filename = os.path.basename(sample_path)
-        st.session_state.audit_results = None
-        st.success(f"✓ Loaded Sample: {sample_choice} ({os.path.basename(sample_path)})")
+    st.caption("📝 **Draft Financial Statements (Yellow Highlights):** Your own draft financial statements are returned in the same format – relevant disclosures are incorporated and every addition or modification is highlighted in yellow.")
 
 st.markdown("---")
-st.markdown("#### 📤 Or Upload Custom Financial Statements (Excel)")
+st.markdown("#### 📤 Upload Financial Statements (Excel)")
 uploaded_file = st.file_uploader(
     "Upload Draft Financial Statements or Published Annual Report (Excel Workbook)",
     type=["xlsx", "xls", "xlsm", "pdf"],
@@ -322,9 +298,9 @@ if uploaded_file is not None:
     if st.session_state.current_filename != uploaded_file.name:
         file_bytes = uploaded_file.read()
         st.session_state.extracted_doc = PDFExtractor.extract_from_bytes(file_bytes, filename=uploaded_file.name)
+        st.session_state.source_bytes = file_bytes
         st.session_state.current_filename = uploaded_file.name
         st.session_state.audit_results = None
-        st.session_state.selected_sample_type = None
         st.success(f"✓ Uploaded and parsed: {uploaded_file.name}")
 
 
@@ -432,6 +408,9 @@ if run_btn and doc and doc.get("success"):
             })
             start_idx += 1
 
+        # Ground every finding in the knowledge base (verified citation + source requirement text)
+        combined_issues = [KnowledgeBase.enrich_issue(x, profile_data) for x in combined_issues]
+
         # Recompute totals
         high_cnt = sum(1 for x in combined_issues if x.get("risk") == "High")
         med_cnt = sum(1 for x in combined_issues if x.get("risk") == "Medium")
@@ -464,9 +443,9 @@ if results:
     st.markdown("---")
     st.markdown("### 4. Review Output & Analytical Results")
 
-    # Determine default output mode based on user's sample selection or review mode
-    default_opt_idx = 0 if (st.session_state.get("selected_sample_type") == "Draft Financial Statements (Yellow Highlights)" or results["review_mode"] == "Option A") else 1
-    
+    # Default output view follows the user's "Output Required" selection
+    default_opt_idx = 0 if st.session_state.get("output_choice") == "Draft Financial Statements (Yellow Highlights)" else 1
+
     output_mode = st.radio(
         "Select Report Output View",
         [
@@ -475,139 +454,75 @@ if results:
         ],
         index=default_opt_idx,
         horizontal=True,
-        help="Switch between the Schedule III Draft Financial Statements with yellow highlighted disclosures and the Financial Reporting Review Points Sheet."
+        help="Switch between your draft financial statements with yellow highlighted disclosures and the Financial Reporting Review Points Sheet."
     )
 
     # =========================================================================
-    # VIEW A: DRAFT FINANCIAL STATEMENTS (YELLOW HIGHLIGHTS)
+    # VIEW A: DRAFT FINANCIAL STATEMENTS (YELLOW HIGHLIGHTS) - ENTITY'S OWN FORMAT
     # =========================================================================
     if output_mode == "Draft Financial Statements (Yellow Highlights)":
         st.markdown(f"""
         <div style="background-color: #FEF9C3; border-left: 5px solid #EAB308; padding: 14px 18px; border-radius: 6px; margin-bottom: 18px;">
-            <b style="color: #854D0E; font-size: 1.05rem;">📝 Draft Financial Statements (Schedule III Compliant)</b><br/>
+            <b style="color: #854D0E; font-size: 1.05rem;">📝 Draft Financial Statements – your format retained</b><br/>
             <span style="color: #713F12; font-size: 0.9rem;">
-            Relevant mandatory disclosures under <b>Schedule III ({schedule_iii_division})</b> to the Companies Act, 2013 and applicable accounting standards have been incorporated.
-            <b>All additions, modifications, and statutory disclosures are highlighted in YELLOW (#FFFF00 / #FFF2CC)</b> to clearly identify required changes before finalisation.
+            The uploaded workbook is returned in exactly the same format (sheets, layout, fonts, number formats and formulas).
+            Line items affected by a review point are <b>highlighted in yellow</b> with a cell comment giving the issue ID and reference,
+            and the required disclosures under <b>Schedule III ({schedule_iii_division})</b> and the applicable standards are inserted into the
+            existing Notes in yellow. Amounts not available in the draft are left as <b>[___]</b> for management to complete.
             </span>
         </div>
         """, unsafe_allow_html=True)
 
-        # Download Button for Draft Financial Statements
-        fs_col1, fs_col2 = st.columns([2, 1])
-        with fs_col1:
-            st.write(
-                "**Downloadable Schedule III Excel Workbook:** Includes **Balance Sheet (Sheet 1)**, **Statement of Profit & Loss (Sheet 2)**, "
-                "**Notes & Mandatory Ageing Schedules (Sheet 3)** with all additions highlighted in yellow, and **Summary of Modifications (Sheet 4)**."
-            )
-            fs_excel_bytes = ExcelReportGenerator.generate_schedule_iii_draft_fs_workbook(
-                issues=results["issues"],
-                profile=results["profile"],
-                doc=doc
-            )
-            fs_filename = f"Draft_Financial_Statements_Yellow_Modifications_{financial_year.replace(' ', '_')}.xlsx"
+        source_bytes = st.session_state.get("source_bytes")
+        current_name = st.session_state.get("current_filename") or ""
+        if not source_bytes or not DraftFSMarker.is_supported(current_name):
+            st.warning("Draft Financial Statements output needs the draft statements uploaded as an Excel workbook (.xlsx / .xlsm) so that its format can be retained. Please upload the Excel draft, or use the Review Points Sheet view.")
+        else:
+            marked_bytes, fs_changes = DraftFSMarker.mark(source_bytes, current_name, results["issues"])
+            base_name = os.path.splitext(current_name)[0]
+            ext = os.path.splitext(current_name)[1].lower()
 
-        with fs_col2:
-            st.download_button(
-                label="⬇️ Download Draft Financial Statements (.xlsx)",
-                data=fs_excel_bytes,
-                file_name=fs_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True
-            )
+            fs_col1, fs_col2 = st.columns([2, 1])
+            with fs_col1:
+                inserted = sum(1 for c in fs_changes if c["type"] == "Disclosure inserted")
+                highlighted = sum(1 for c in fs_changes if c["type"] == "Existing line highlighted")
+                st.write(f"**{highlighted}** existing line items highlighted and **{inserted}** disclosure lines incorporated. "
+                         "A 'Yellow Changes Index' sheet is added at the end of the workbook as the audit trail.")
+            with fs_col2:
+                st.download_button(
+                    label="⬇️ Download Draft Financial Statements",
+                    data=marked_bytes,
+                    file_name=f"{base_name}_Reviewed_Yellow{ext}",
+                    mime="application/vnd.ms-excel.sheet.macroEnabled.12" if ext == ".xlsm" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
 
-        st.markdown("---")
+            st.markdown("---")
+            preview = DraftFSMarker.preview(marked_bytes, source_bytes)
+            sheet_tabs = st.tabs([f"📄 {name}" for name in preview] + ["📋 Yellow Changes Index"])
 
-        # Interactive Schedule III Financial Statements Viewer
-        tab_bs, tab_pl, tab_notes, tab_mods = st.tabs([
-            "🏛️ Balance Sheet (Schedule III)",
-            "📈 Statement of Profit & Loss",
-            "📑 Notes & Ageing Schedules (Incorporated)",
-            "📋 Summary of Modifications"
-        ])
+            for tab, (sheet_name, data) in zip(sheet_tabs, preview.items()):
+                with tab:
+                    grid, yellow = data["grid"], data["yellow"]
+                    if not grid:
+                        st.caption("Empty sheet")
+                        continue
+                    width = max(len(r) for r in grid)
+                    grid = [list(r) + [""] * (width - len(r)) for r in grid]
+                    yellow = [list(r) + [False] * (width - len(r)) for r in yellow]
+                    sheet_df = pd.DataFrame(grid, columns=[chr(65 + i) if i < 26 else f"C{i+1}" for i in range(width)])
+                    sheet_df.index = range(1, len(sheet_df) + 1)
+                    sheet_df = sheet_df.astype(str).replace({"None": ""})
+                    styles = pd.DataFrame(
+                        [["background-color: #FFFF00; color: #000000; font-weight: 600" if f else "" for f in r] for r in yellow],
+                        index=sheet_df.index, columns=sheet_df.columns
+                    )
+                    st.dataframe(sheet_df.style.apply(lambda _: styles, axis=None), use_container_width=True, height=min(640, 38 + 35 * len(sheet_df)))
 
-        is_ind_as_mode = "ind as" in framework.lower()
-
-        with tab_bs:
-            st.markdown(f"#### Draft Balance Sheet as at 31st March, 2026 ({schedule_iii_division})")
-            st.caption("Figures and line items highlighted in yellow indicate disclosures, schedules, or reclassifications incorporated by the assistant.")
-            
-            bs_df = ScheduleIIIViewer.get_balance_sheet_data(is_ind_as=is_ind_as_mode)
-
-            def style_bs_rows(row):
-                status_text = str(row.get("Modification & Audit Status", ""))
-                part_text = str(row.get("Particulars", ""))
-                if "YELLOW" in status_text:
-                    return ['background-color: #FEF08A; color: #854D0E; font-weight: bold'] * len(row)
-                elif part_text.isupper() or part_text.startswith("TOTAL") or part_text.startswith("I.") or part_text.startswith("II."):
-                    return ['background-color: #E2E8F0; font-weight: bold; color: #1F4E79'] * len(row)
-                return [''] * len(row)
-
-            st.dataframe(bs_df.style.apply(style_bs_rows, axis=1), use_container_width=True, height=520)
-
-        with tab_pl:
-            st.markdown(f"#### Draft Statement of Profit and Loss for the year ended 31st March, 2026")
-            st.caption("Revenue disaggregation, actuarial sensitivity, and effective tax reconciliation lines highlighted in yellow.")
-            
-            pl_df = ScheduleIIIViewer.get_profit_and_loss_data(is_ind_as=is_ind_as_mode)
-
-            def style_pl_rows(row):
-                status_text = str(row.get("Audit & Schedule III Status", ""))
-                part_text = str(row.get("Particulars", ""))
-                if "YELLOW" in status_text:
-                    return ['background-color: #FEF08A; color: #854D0E; font-weight: bold'] * len(row)
-                elif "Total" in part_text or "Profit" in part_text:
-                    return ['background-color: #E2E8F0; font-weight: bold; color: #1F4E79'] * len(row)
-                return [''] * len(row)
-
-            st.dataframe(pl_df.style.apply(style_pl_rows, axis=1), use_container_width=True, height=500)
-
-        with tab_notes:
-            st.markdown("#### Mandatory Schedule III (2021 Amendments) & Standards Notes")
-            st.caption("The following mandatory disclosure notes have been incorporated into the draft accounts with yellow markup.")
-
-            with st.expander("📌 Note 12: Promoter Shareholding Schedule [Clause 6(J)] - Incorporated in Yellow", expanded=True):
-                st.dataframe(ScheduleIIIViewer.get_promoter_table(), use_container_width=True)
-
-            with st.expander("📌 Note 16: Trade Payables Ageing Schedule & Section 22 MSMED Act Disclosures [Clause 6(FA)] - Incorporated in Yellow", expanded=True):
-                st.markdown("**Trade Payables Ageing Schedule:**")
-                st.dataframe(ScheduleIIIViewer.get_trade_payables_ageing(), use_container_width=True)
-                st.markdown("**MSMED Act Section 22 Disclosures:**")
-                msme_summary = pd.DataFrame([
-                    {"Particulars": "(a) Principal amount remaining unpaid to any supplier as at year end", "Amount (₹ in Lakhs)": "280.00"},
-                    {"Particulars": "(b) Interest due thereon remaining unpaid to any supplier as at year end", "Amount (₹ in Lakhs)": "1.25"},
-                    {"Particulars": "(c) Amount of interest paid under Section 16 of the MSMED Act, 2006", "Amount (₹ in Lakhs)": "Nil"},
-                    {"Particulars": "(d) Amount of further interest remaining due and payable in succeeding years", "Amount (₹ in Lakhs)": "Nil"},
-                ])
-                st.dataframe(msme_summary, use_container_width=True)
-
-            with st.expander("📌 Note 10: Trade Receivables Ageing Schedule [Clause 6(L)] - Incorporated in Yellow", expanded=False):
-                st.dataframe(ScheduleIIIViewer.get_trade_receivables_ageing(), use_container_width=True)
-
-            with st.expander("📌 Note 2: Capital Work-in-Progress (CWIP) Ageing & Completion Schedule [Clause 6(EA)] - Incorporated in Yellow", expanded=False):
-                st.dataframe(ScheduleIIIViewer.get_cwip_ageing(), use_container_width=True)
-
-            with st.expander("📌 Note 26: 11 Key Analytical Ratios & >25% Variance Explanations [Clause 6(VA)] - Incorporated in Yellow", expanded=False):
-                st.dataframe(ScheduleIIIViewer.get_ratios_table(), use_container_width=True)
-
-            with st.expander("📌 Note 27: Additional Regulatory Information (Schedule III 2021 Amendments) - Incorporated in Yellow", expanded=False):
-                st.dataframe(ScheduleIIIViewer.get_regulatory_table(), use_container_width=True)
-
-        with tab_mods:
-            st.markdown("#### Summary of Modifications Incorporated into Draft Financial Statements")
-            st.caption("Audit trail linking each yellow highlighted line item to its statutory citation.")
-            
-            mod_data = []
-            for idx, item in enumerate(results["issues"], start=1):
-                mod_data.append({
-                    "Modification ID": f"MOD-{idx:03d}",
-                    "Statement / Note Location": item.get("ref", "Financial Statements"),
-                    "Description of Addition / Modification": item.get("description", ""),
-                    "Statutory / Standard Citation": item.get("statutory_ref", item.get("technical_ref", "Schedule III")),
-                    "Action Taken in Draft Accounts": item.get("suggested_correction", item.get("action", "")),
-                    "Highlight": "Yellow (#FFFF00)"
-                })
-            st.dataframe(pd.DataFrame(mod_data), use_container_width=True)
+            with sheet_tabs[-1]:
+                st.caption("Every yellow change, linked to its review point and reference.")
+                st.dataframe(pd.DataFrame(fs_changes), use_container_width=True)
 
     # =========================================================================
     # VIEW B: FINANCIAL REPORTING REVIEW POINTS SHEET
@@ -719,25 +634,35 @@ if results:
                 risk_level = issue.get("risk", "Medium")
                 badge_class = "badge-high" if risk_level == "High" else "badge-med" if risk_level == "Medium" else "badge-low"
 
+                req_html = "".join(
+                    f"<div style='margin-top:4px;'><b>{html.escape(p['ref'])}:</b> {html.escape(p['text'][:600])}{'…' if len(p['text']) > 600 else ''}</div>"
+                    for p in issue.get("source_requirements", [])
+                )
+                req_block = (
+                    f"<div style='background-color:#EEF2FF; color:#1E1B4B; padding:8px 12px; border-radius:4px; font-size:0.85rem; margin-top:8px;'>"
+                    f"<b>Requirement as per the Standard (source text):</b>{req_html}</div>"
+                ) if req_html else ""
+
                 with st.container():
                     st.markdown(f"""
-                    <div style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px; margin-bottom: 14px; background-color: #FFFFFF;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <span style="font-weight: 700; color: #1F4E79; font-size: 1.05rem;">{issue.get('issue_id')} — {issue.get('description')}</span>
+                    <div style="border: 1px solid #CBD5E1; border-radius: 8px; padding: 16px; margin-bottom: 14px; background-color: #FFFFFF; color: #0F172A;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 12px;">
+                            <span style="font-weight: 700; color: #1F4E79; font-size: 1.05rem;">{issue.get('issue_id')} — {html.escape(issue.get('description', ''))}</span>
                             <span class="{badge_class}">{risk_level} Risk</span>
                         </div>
-                        <div style="font-size: 0.85rem; color: #64748B; margin-bottom: 8px;">
-                            <b>Category:</b> {issue.get('category')} | <b>Reference:</b> {issue.get('ref')} | <b>Status:</b> {issue.get('status')}
+                        <div style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">
+                            <b>Area:</b> {html.escape(issue.get('category', ''))} | <b>FS / Note reference:</b> {html.escape(issue.get('ref', ''))} | <b>Nature:</b> {html.escape(str(issue.get('status', '')))}
                         </div>
-                        <div style="background-color: #F1F5F9; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; margin-bottom: 8px;">
-                            <b>Current Disclosure / Extract:</b><br/>{issue.get('current_disclosure', issue.get('evidence', 'N/A'))}
+                        <div style="background-color: #F1F5F9; color: #0F172A; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; margin-bottom: 8px;">
+                            <b>Observation (as presented in draft):</b><br/>{html.escape(str(issue.get('current_disclosure', issue.get('evidence', 'N/A'))))}
                         </div>
-                        <div class="correction-box">
-                            <b>Suggested Correction / Action Required:</b><br/>{issue.get('suggested_correction', issue.get('action', 'N/A'))}
+                        <div class="correction-box" style="color: #422006;">
+                            <b>Suggested correction / disclosure:</b><br/>{html.escape(str(issue.get('suggested_correction', issue.get('action', 'N/A'))))}
                         </div>
                         <div style="font-size: 0.85rem; color: #334155; margin-top: 6px;">
-                            <b>Statutory / Standard Reference:</b> <span style="font-family: monospace; background-color: #EDE9FE; padding: 2px 6px; border-radius: 4px;">{issue.get('statutory_ref', issue.get('technical_ref', 'Reference Verification Required'))}</span>
+                            <b>Reference:</b> <span style="background-color: #EDE9FE; color: #3B0764; padding: 2px 6px; border-radius: 4px;">{html.escape(issue.get('statutory_ref', 'Reference Verification Required'))}</span>
                         </div>
+                        {req_block}
                     </div>
                     """, unsafe_allow_html=True)
 
