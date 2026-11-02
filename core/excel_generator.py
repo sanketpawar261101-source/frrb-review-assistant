@@ -58,6 +58,83 @@ class ExcelReportGenerator:
     )
 
     # =========================================================================
+    # FRRB TECHNICAL REVIEW FORMAT (evidence-based review engine)
+    # =========================================================================
+    @classmethod
+    def generate_tr_workbook(
+        cls,
+        findings: List[Dict[str, Any]],
+        checks: List[Dict[str, str]],
+        profile: Dict[str, Any],
+        entity_name: str = "",
+    ) -> bytes:
+        """Review observations in the FRRB Technical Review layout, with the applicability log and detected profile."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Review Observations"
+        ws["A1"] = f"FINANCIAL REPORTING REVIEW - OBSERVATIONS{(' - ' + entity_name) if entity_name else ''}"
+        ws["A1"].font = cls.TITLE_FONT
+        ws["A2"] = (f"Framework: {profile.get('framework')} | {profile.get('schedule_iii_division')} | {profile.get('financial_year')} | "
+                    f"{profile.get('company_type')}{' (listed)' if profile.get('listed') else ''} | Amounts: {profile.get('unit', '')} | "
+                    f"Observations: {len(findings)}")
+        ws["A2"].font = cls.SUBTITLE_FONT
+        headers = ["S. No.", "Title", "Sub Title", "View of the Reviewer", "Matter contained in the Financial Statements (evidence and location)",
+                   "Exact Technical Requirement(s)", "Nature", "Significance", "Basis", "Previously identified?", "Suggested correction"]
+        hr = 4
+        for i, h in enumerate(headers, start=1):
+            c = ws.cell(row=hr, column=i, value=h)
+            c.fill, c.font, c.border = cls.HEADER_FILL, cls.HEADER_FONT, cls.HEADER_BORDER
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        nature_fill = {"Non-compliance": cls.HIGH_RISK_FILL, "Inconsistency": cls.HIGH_RISK_FILL, "Disclosure gap": cls.MED_RISK_FILL,
+                       "Potential concern": cls.MED_RISK_FILL, "Requires verification": cls.LOW_RISK_FILL}
+        r = hr + 1
+        for n, f in enumerate(findings, start=1):
+            evidence = "\n".join(f"• {e['text']}" for e in f.get("evidence", []))
+            matter = (f.get("matter", "") + ("\n\nEvidence:\n" + evidence if evidence else "")).strip()
+            reqs = "\n\n".join(f"{t['ref']}: \"{t['text']}\"" for t in f.get("source_requirements", [])) or f.get("statutory_ref", "")
+            row = [n, f.get("title", ""), f.get("sub_title", ""), f.get("view", ""), matter[:32000], reqs[:32000], f.get("nature", ""),
+                   f.get("significance", ""), f.get("basis", ""), f.get("reference_status", "Not compared"), f.get("suggested_correction", "")]
+            for i, v in enumerate(row, start=1):
+                c = ws.cell(row=r, column=i, value=v)
+                c.font, c.border = cls.REGULAR_FONT, cls.THIN_BORDER
+                c.alignment = Alignment(vertical="top", wrap_text=True, horizontal="center" if i in (1, 7, 8) else "left")
+            ws.cell(row=r, column=7).fill = nature_fill.get(f.get("nature"), cls.LOW_RISK_FILL)
+            ws.cell(row=r, column=7).font = cls.BOLD_FONT
+            r += 1
+        for i, w in enumerate([7, 22, 22, 55, 55, 55, 15, 12, 20, 18, 40], start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.row_dimensions[hr].height = 40
+        ws.freeze_panes = ws.cell(row=hr + 1, column=4)
+        ws.auto_filter.ref = f"A{hr}:K{max(r - 1, hr)}"
+
+        wc = wb.create_sheet("Checks & Applicability")
+        wc["A1"] = "CHECKS PERFORMED - APPLICABILITY ESTABLISHED FROM THE FINANCIAL STATEMENTS"
+        wc["A1"].font = cls.TITLE_FONT
+        cols = ["Check", "Area", "Applicable", "Applicability basis (from the financial statements)", "Result"]
+        for i, h in enumerate(cols, start=1):
+            c = wc.cell(row=3, column=i, value=h)
+            c.fill, c.font, c.border = cls.HEADER_FILL, cls.HEADER_FONT, cls.HEADER_BORDER
+        for j, chk in enumerate(checks, start=4):
+            for i, k in enumerate(cols, start=1):
+                c = wc.cell(row=j, column=i, value=chk.get(k, ""))
+                c.font, c.border = cls.REGULAR_FONT, cls.THIN_BORDER
+                c.alignment = Alignment(vertical="top", wrap_text=True)
+        for i, w in enumerate([24, 26, 11, 80, 34], start=1):
+            wc.column_dimensions[get_column_letter(i)].width = w
+
+        wp = wb.create_sheet("Entity Profile")
+        wp["A1"] = "ENTITY PROFILE (DETECTED FROM THE FINANCIAL STATEMENTS)"
+        wp["A1"].font = cls.TITLE_FONT
+        for j, (k, v) in enumerate(profile.items(), start=3):
+            wp.cell(row=j, column=1, value=k.replace("_", " ").title()).font = cls.BOLD_FONT
+            wp.cell(row=j, column=2, value=str(v))
+        wp.column_dimensions["A"].width, wp.column_dimensions["B"].width = 30, 70
+
+        out = io.BytesIO()
+        wb.save(out)
+        return out.getvalue()
+
+    # =========================================================================
     # OPTION 1: FINANCIAL REPORTING REVIEW POINTS SHEET
     # =========================================================================
     @classmethod

@@ -67,6 +67,9 @@ TARGET_NOTE = {
     "INDAS-19-SENSITIVITY": "employee benefit",
     "INDAS-19-MORTALITY": "employee benefit",
     "INDAS-12-TAX-RECON": "tax",
+    "LTB-TERMS": "borrowings",
+    "AUDITOR-FEE": "other expenses",
+    "EMP-BEN": "employee",
 }
 
 # Draft disclosure wording (Schedule III / standard format). Amounts are left blank on purpose.
@@ -171,6 +174,27 @@ TEMPLATES = {
     ],
 }
 
+TEMPLATES.update({
+    "AUDITOR-FEE": [
+        "Payments to the auditor:",
+        f"(a) As auditor: {BLANK}",
+        f"(b) For taxation matters: {BLANK}",
+        f"(c) For company law matters: {BLANK}",
+        f"(d) For other services: {BLANK}",
+        f"(e) For reimbursement of expenses: {BLANK}",
+    ],
+    "LTB-TERMS": [
+        f"Terms of repayment: {BLANK} (repayable on demand / in instalments of {BLANK} from {BLANK}); rate of interest: {BLANK} "
+        "(state if interest-free); security: unsecured / {BLANK}. Amounts repayable within twelve months: {BLANK}.",
+    ],
+    "EMP-BEN": [
+        f"Defined benefit plan (gratuity): principal actuarial assumptions - discount rate {BLANK}, salary escalation {BLANK}, "
+        f"attrition {BLANK}, mortality table {BLANK}.",
+        f"Reconciliation of the defined benefit obligation: opening {BLANK}; current service cost {BLANK}; interest cost {BLANK}; "
+        f"benefits paid {BLANK}; actuarial (gain)/loss {BLANK}; closing {BLANK}.",
+    ],
+})
+
 REGULATORY_CODES = {
     "SCH3-BENAMI-PROPERTY", "SCH3-WILFUL-DEFAULTER", "SCH3-STRUCK-OFF", "SCH3-LAYERING", "SCH3-UNDISCLOSED-INCOME",
     "SCH3-CRYPTO-CURRENCY", "SCH3-TITLE-DEEDS", "SCH3-LOANS-TO-PROMOTERS-KMPS",
@@ -201,20 +225,26 @@ class DraftFSMarker:
 
         regulatory: List[Dict[str, Any]] = []
         new_notes: List[Tuple[Dict[str, Any], List[str]]] = []
+        # Phase 1 - highlight the exact rows each observation cites, while row numbers are still the original ones
+        for issue in issues:
+            if not cls._highlight_evidence(wb, issue, changes):
+                cls._highlight_anchors(wb, issue, changes)
+        # Phase 2 - incorporate draft wording only where a disclosure is genuinely missing
         for issue in issues:
             code = issue.get("rule_code", "")
-            cls._highlight_anchors(wb, issue, changes)
+            if issue.get("nature", "Disclosure gap") != "Disclosure gap" or notes_ws is None or code == "NOTE-XREF":
+                continue
             if code in REGULATORY_CODES:
                 regulatory.append(issue)
-            elif notes_ws is not None and (code in TEMPLATES or code in TARGET_NOTE):
-                lines = TEMPLATES.get(code) or cls._fallback_lines(issue)
-                if not cls._insert_disclosure(wb, notes_ws, issue, lines, changes):
-                    new_notes.append((issue, lines))
+                continue
+            lines = TEMPLATES.get(code) or cls._fallback_lines(issue)
+            if not cls._insert_disclosure(wb, issue, lines, changes):
+                new_notes.append((issue, lines))
 
         # Disclosures with no existing note are added after the last existing note, one block per area
         groups: Dict[str, List[Tuple[Dict[str, Any], List[str]]]] = {}
         for issue, lines in new_notes:
-            heading = re.sub(r"^.*?/\s*", "", issue.get("ref", "")) or issue.get("category", "Disclosure")
+            heading = issue.get("sub_title") or re.sub(r"^.*?/\s*", "", issue.get("ref", "")) or issue.get("category", "Disclosure")
             heading = re.sub(r"^(notes to accounts|note on)\s*[-:]?\s*", "", heading, flags=re.I).strip() or "Disclosure"
             groups.setdefault(heading[:1].upper() + heading[1:], []).append((issue, lines))
         if notes_ws is not None and regulatory:
@@ -245,9 +275,10 @@ class DraftFSMarker:
     # ------------------------------------------------------------------
     @staticmethod
     def _notes_sheet(wb) -> Optional[Any]:
-        for ws in wb.worksheets:
-            if "note" in ws.title.lower():
-                return ws
+        """The sheet where additional notes are appended: the last notes sheet."""
+        sheets = [ws for ws in wb.worksheets if "note" in ws.title.lower()]
+        if sheets:
+            return sheets[-1]
         for ws in wb.worksheets:
             if any(_is_note_heading(c.value) for row in ws.iter_rows(max_col=2) for c in row):
                 return ws
@@ -264,6 +295,27 @@ class DraftFSMarker:
             body = cell.comment.text + "\n\n" + body
         cell.comment = Comment(body[:1500], "FRR Review")
         cell.comment.width, cell.comment.height = 320, 160
+
+    @classmethod
+    def _highlight_evidence(cls, wb, issue: Dict[str, Any], changes: List[Dict[str, Any]]) -> bool:
+        """Highlights the rows cited as evidence; returns False when the observation has no located rows."""
+        done = False
+        for ev in issue.get("evidence", []):
+            sheet, row = ev.get("sheet"), ev.get("row") or 0
+            if sheet not in wb.sheetnames or row <= 0:
+                continue
+            ws = wb[sheet]
+            cells = [c for c in ws[row] if c.value is not None]
+            if not cells:
+                continue
+            for c in ws[row][: ws.max_column]:
+                c.fill = YELLOW
+            cls._comment(cells[0], issue)
+            changes.append({"issue_id": issue.get("issue_id"), "sheet": sheet, "cell": cells[0],
+                            "type": "Existing line highlighted", "text": str(ev.get("text", cells[0].value))[:160],
+                            "reference": issue.get("statutory_ref", "")})
+            done = True
+        return done
 
     @classmethod
     def _highlight_anchors(cls, wb, issue: Dict[str, Any], changes: List[Dict[str, Any]]) -> None:
@@ -302,25 +354,37 @@ class DraftFSMarker:
                             return False
         return True
 
+    @staticmethod
+    def _row_text(ws, r: int) -> Tuple[Optional[str], int]:
+        """First text cell of a row (notes are often indented into columns B-D) and its column."""
+        for col in range(1, min(ws.max_column, 6) + 1):
+            v = ws.cell(r, col).value
+            if isinstance(v, str) and v.strip():
+                return v, col
+        return None, 1
+
     @classmethod
-    def _note_block_end(cls, ws, keyword: str) -> Optional[Tuple[int, int]]:
-        start = None
+    def _note_block_end(cls, ws, keyword: str) -> Optional[Tuple[int, int, int]]:
+        start, col = None, 1
         for r in range(1, ws.max_row + 1):
-            v = ws.cell(r, 1).value
+            v, c = cls._row_text(ws, r)
             if start is None and _is_note_heading(v) and keyword in _text(v):
-                start = r
+                start, col = r, c
             elif start is not None and (_is_note_heading(v) or _text(v).startswith("note (additional)")):
-                return start, r - 1
-        return (start, ws.max_row) if start else None
+                end = r - 1
+                while end > start and all(x.value is None for x in ws[end]):
+                    end -= 1
+                return start, end, col
+        return (start, ws.max_row, col) if start else None
 
     @classmethod
     def _write_lines(cls, ws, at_row: int, lines: List[str], style_row: int, issue: Dict[str, Any],
-                     changes: List[Dict[str, Any]], heading: Optional[str] = None) -> None:
-        ref = ws.cell(style_row, 1)
+                     changes: List[Dict[str, Any]], heading: Optional[str] = None, col: int = 1) -> None:
+        ref = ws.cell(style_row, col)
         first = lines[0] if lines[0].startswith("[") else f"[{issue.get('issue_id', '')}] {lines[0]}"
         rows = ([heading] if heading else []) + [first] + lines[1:]
         for offset, line in enumerate(rows):
-            c = ws.cell(at_row + offset, 1, line)
+            c = ws.cell(at_row + offset, col, line)
             c.font = copy(ref.font)
             if heading and offset == 0:
                 c.font = Font(name=ref.font.name, size=ref.font.size, bold=True)
@@ -329,25 +393,34 @@ class DraftFSMarker:
             c.fill = YELLOW
             changes.append({"issue_id": issue.get("issue_id"), "sheet": ws.title, "cell": c,
                             "type": "Disclosure inserted", "text": line[:120], "reference": issue.get("statutory_ref", "")})
-        cls._comment(ws.cell(at_row, 1), issue)
+        cls._comment(ws.cell(at_row, col), issue)
 
     @classmethod
-    def _insert_disclosure(cls, wb, ws, issue: Dict[str, Any], lines: List[str], changes: List[Dict[str, Any]]) -> bool:
-        """Inserts inside the matching existing note; returns False when no such note can take it."""
-        block = cls._note_block_end(ws, TARGET_NOTE.get(issue.get("rule_code", ""), "\u0000"))
-        if block and cls._safe_to_insert(wb, ws, block[1] + 1):
+    def _insert_disclosure(cls, wb, issue: Dict[str, Any], lines: List[str], changes: List[Dict[str, Any]]) -> bool:
+        """Inserts inside the matching existing note (in whichever notes sheet holds it); False when no note can take it."""
+        keyword = TARGET_NOTE.get(issue.get("rule_code", ""))
+        if not keyword:
+            return False
+        for ws in wb.worksheets:
+            if "index" in ws.title.lower():
+                continue
+            block = cls._note_block_end(ws, keyword)
+            if not block:
+                continue
             at = block[1] + 1
-            ws.insert_rows(at, len(lines))
-            cls._write_lines(ws, at, lines, block[1], issue, changes)
-            return True
+            if cls._safe_to_insert(wb, ws, at):
+                ws.insert_rows(at, len(lines))
+                cls._write_lines(ws, at, lines, block[1], issue, changes, col=block[2])
+                return True
         return False
 
     @classmethod
     def _append_note(cls, wb, ws, heading: str, lines: List[str], issue: Dict[str, Any], changes: List[Dict[str, Any]]) -> None:
         last = ws.max_row
-        while last > 1 and ws.cell(last, 1).value is None:
+        while last > 1 and all(c.value is None for c in ws[last]):
             last -= 1
-        cls._write_lines(ws, last + 2, lines, last, issue, changes, heading=f"Note (Additional): {heading}")
+        _, col = cls._row_text(ws, last)
+        cls._write_lines(ws, last + 2, lines, last, issue, changes, heading=f"Note (Additional): {heading}", col=col)
 
     @staticmethod
     def _add_index_sheet(wb, changes: List[Dict[str, Any]]) -> None:

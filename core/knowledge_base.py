@@ -86,6 +86,15 @@ class KnowledgeBase:
         para = re.sub(r"\([a-z]+\)$", "", para.strip())
         return _load().get(standard, {}).get(para)
 
+    @staticmethod
+    def find_paragraph(standard: str, phrase: str) -> Optional[Dict[str, str]]:
+        """Locates the paragraph of a standard whose text contains the phrase (used to cite by content, not by memory)."""
+        rx = re.compile(re.escape(phrase).replace(r"\ ", r"\s+"), re.I)
+        for para, text in _load().get(standard, {}).items():
+            if rx.search(text):
+                return {"ref": f"{standard}.{para}", "para": para, "text": text}
+        return None
+
     @classmethod
     def cited_paragraphs(cls, citation: str) -> List[Dict[str, str]]:
         """Returns [{'ref': 'Ind AS 19.145', 'text': ...}] for every paragraph in a citation string."""
