@@ -1,222 +1,155 @@
-# Financial Reporting Review Assistant (FRRB Expert Edition)
+# Financial Reporting Review Assistant
 
-A browser-based, AI-augmented analytical application designed for **Chartered Accountants** and **Financial Reporting Review Board (FRRB)** technical reviewers. The application automates the rigorous technical audit of draft financial statements and published annual reports against **Indian Accounting Standards (Ind AS)**, **Accounting Standards (AS)**, **Schedule III** (Divisions I, II, and III), the **Companies Act, 2013**, **CARO 2020**, and authentic **ICAI FRRB** review publications.
+A browser-based review assistant for **Chartered Accountants** and **Financial Reporting Review Board (FRRB)** technical
+reviewers. It reviews draft financial statements and annual reports against **Indian Accounting Standards (Ind AS)**,
+**Accounting Standards (AS)**, **Schedule III** (Divisions I, II and III) and the **Companies Act, 2013**, and produces
+evidence-based review observations in the format of an FRRB Technical Review report.
 
-## Review methodology (evidence-based engine)
-
-The review follows the principles of an FRRB Technical Review rather than a checklist:
-
-1. **Accuracy over quantity** - an observation is raised only when a deviation is substantiated.
-2. **Applicability first** - the entity profile (framework, Schedule III division, private / public / listed from the CIN,
-   reporting date, rounding unit, small company / SMC status) is detected from the statements themselves, and every check
-   first establishes from the company's own figures whether the item exists (e.g. no CWIP -> no CWIP ageing point).
-3. **No hallucination** - every observation cites its evidence (sheet / page, row, caption, amounts); Ind AS / AS
-   requirements are quoted from the paragraph text in `knowledge_base/standards_paragraphs.json`.
-4. **No checklist observations** - absence of "negative statements" (benami, crypto, wilful defaulter, struck-off, layers)
-   is not reported.
-5. **Holistic cross-checks** - face vs notes, ratio table vs workings, related-party note vs balances, ageing vs other notes,
-   deferred tax movement, EPS recomputation, stale periods and formula errors.
-6. **Classification** - Non-compliance, Inconsistency, Disclosure gap, Potential concern, Requires verification.
-
-Core modules: `core/fs_model.py` (structured statements + detected profile), `core/review_engine.py` (checks and
-applicability log), `core/ai_reviewer.py` (optional Gemini review; quotes and amounts are verified against the document and
-unsupported items are rejected), `core/reference_matcher.py` (tags observations as "Previously identified" or "New" against
-an uploaded reference sheet / TR report), `core/fs_marker.py` (marks the entity's own workbook in yellow).
+**Live application:** https://frrb-review-assistant.streamlit.app
 
 ---
 
-## 🌟 Key Capabilities
+## Review methodology
 
-1. **Entity Applicability Assessment & Statutory Guardrails**:
-   - Validates entity profile against the *Companies (Indian Accounting Standards) Rules, 2015* and *Schedule III*.
-   - Prevents misclassification (e.g., flags Listed companies attempting to apply AS Division I; checks NBFC classification for Division III; prompts for Net Worth threshold verification when unlisted).
+The assistant is designed to think like a financial reporting reviewer, not to run through a checklist.
 
-2. **Dual-Mode Review Architecture**:
-   - **Option A: Financial Statements Review Before Finalisation**
-     - Target: Draft accounts and unfinalised notes.
-     - Detects arithmetic imbalances ($Assets \neq Equity + Liabilities$), unlinked cash flow figures, missing mandatory disclosures, and standard violations.
-     - Generates an **audit-grade Excel Workbook** with an **8-Column Issue Log (Sheet 1)** and a **Complete Financial Model with YELLOW CELL HIGHLIGHTING (Sheet 2)** identifying exact cells requiring correction or addition.
-   - **Option B: Annual Report Review and Red-Flag Identification**
-     - Target: Published annual reports.
-     - Scans Independent Auditor's Reports (Qualified, Adverse, Disclaimer opinions; Emphasis of Matter), CARO 2020 clauses (e.g. Clause 3(ii)(b) quarterly bank statement discrepancies), and accounting policy gaps.
-     - Generates a **Structured Red-Flag Register with High/Medium/Low Risk Ratings** and actionable FRRB follow-up procedures.
+1. **Accuracy over quantity** - an observation is raised only when a deviation is substantiated by the financial statements.
+2. **Applicability first** - before any check, the assistant establishes from the company's own figures and disclosures
+   whether the item, transaction or disclosure exists. A nil or absent item is recorded as "Not applicable", never reported
+   (for example: no capital work-in-progress -> no CWIP ageing observation).
+3. **Evidence for every observation** - each observation cites its location (sheet / page, row, caption) and the amounts
+   relied on. Ind AS / AS requirements are quoted from the paragraph text of the notified standards.
+4. **No checklist observations** - the absence of "negative statements" (benami property, crypto currency, wilful defaulter,
+   struck-off companies, layers of companies) is not reported, because those disclosures are required only where the
+   situation exists.
+5. **Holistic cross-verification** - the strongest observations come from comparing one part of the financial statements with
+   another: face vs notes, ratio table vs its workings, related-party note vs balances, ageing schedules vs other notes,
+   deferred tax movement, EPS recomputation, periods presented and spreadsheet errors.
+6. **Classification** - every observation is classified as **Non-compliance**, **Inconsistency**, **Disclosure gap**,
+   **Potential concern** or **Requires verification**.
 
-3. **Traceable Technical References (No Hallucinations)**:
-   - Incorporates verbatim principles and citations from the ICAI publication *Study on Compliance of Financial Reporting Requirements (Ind AS Framework)*, amended Schedule III, and CARO 2020.
-   - If a standard paragraph cannot be verified with certainty, the system marks it as `"Reference Verification Required"`.
-
-4. **Negative Test Verification (Zero False Positives)**:
-   - Built-in validation ensures that compliant statements containing all required disclosures and reconciled balances are not falsely flagged.
-
-5. **AI + Offline Expert Engine**:
-   - Optional live **Google Gemini API** integration (`gemini-1.5-flash`) for nuanced NLP disclosure analysis.
-   - Intelligent **Offline CA Expert Heuristics Engine** active when no API key is set—enabling 100% offline, private, zero-cost operation.
+### Entity profile detected from the statements
+The framework (Ind AS / AS), Schedule III division, private / public / listed status (from the CIN), reporting date,
+rounding unit and small company / Small and Medium-sized Company (SMC) status are read from the financial statements
+themselves. If the sidebar selection differs, the assistant shows the difference and, by default, uses the detected profile,
+so that statutory exemptions (for example the cash flow statement exemption for small companies under Section 2(40), or the
+SMC relaxations under AS 20 and AS 15) are applied correctly.
 
 ---
 
-## 📁 Project Architecture
+## Outputs
+
+1. **Financial Reporting Review Points Sheet** (on screen and as an Excel download)
+   - *Review Observations* - S. No., Title, Sub Title, View of the Reviewer, Matter contained in the Financial Statements
+     (evidence and location), Exact Technical Requirement(s), Nature, Significance, Basis, Suggested correction.
+   - *Checks & Applicability* - every check performed, whether it was applicable, the basis from the financial statements,
+     and the result.
+   - *Entity Profile* - the profile detected from the statements.
+
+2. **Draft Financial Statements (Yellow Highlights)** - the uploaded Excel workbook is returned **in its own format**
+   (sheets, layout, fonts, number formats and formulas retained). The lines each observation relies on are highlighted in
+   yellow with a cell comment; where a disclosure is genuinely missing, draft wording is inserted into the relevant note in
+   yellow, with amounts left as `[___]` for management to complete. A *Yellow Changes Index* sheet lists every change.
+
+---
+
+## Optional AI review (Google Gemini)
+
+Without an API key the application runs entirely on the deterministic review engine. With a Gemini API key
+(model `gemini-2.5-flash`), the AI looks for additional matters. Its output is accepted only if:
+- every extract it quotes is found verbatim in the uploaded statements,
+- every amount it relies on appears in the statements,
+- it is not a bare checklist point, and
+- it does not duplicate an observation already raised.
+
+AI suggestions that fail these tests are rejected and listed separately. When a key is used, extracts of the financial
+statements are sent to Google.
+
+---
+
+## Project structure
 
 ```
-Group Project/
-├── app.py                      # Main Streamlit web application
-├── core/
-│   ├── applicability.py        # Framework & Schedule III applicability validator
-│   ├── pdf_extractor.py        # PyMuPDF parser, section locator & scanned doc detector
-│   ├── rules_engine.py         # Deterministic compliance & arithmetic audit engine
-│   ├── frrb_library.py         # Curated ICAI FRRB precedents and technical references
-│   ├── ai_analyzer.py          # AI disclosure analysis (Gemini API + offline expert heuristics)
-│   └── excel_generator.py      # Professional Excel generator with yellow cell highlighting
-├── sample_data/
-│   ├── generate_sample_pdfs.py # Generator for reproducible test cases
-│   ├── Sample_Draft_FS_Option_A_With_Errors.pdf
-│   ├── Sample_Annual_Report_Option_B_RedFlags.pdf
-│   └── Sample_Compliant_FS_Negative_Test.pdf
-├── tests/
-│   ├── test_applicability.py   # Unit tests for applicability rules
-│   ├── test_pdf_extractor.py   # Unit tests for PDF parsing and scanned doc detection
-│   ├── test_rules_engine.py    # Integration tests for Option A, Option B & Negative test
-│   └── test_excel_generator.py # Tests for Excel 8 columns & yellow highlighting
-├── requirements.txt            # Python dependencies
-└── README.md                   # System documentation and demonstration guide
+app.py                         Streamlit web application
+core/
+  fs_model.py                  Structured model of the statements; detects the entity profile
+  review_engine.py             Applicability-gated, evidence-based checks and the applicability log
+  ai_reviewer.py               Optional Gemini review with evidence validation
+  knowledge_base.py            Paragraph lookup in the Ind AS / AS knowledge base; citation verification
+  fs_marker.py                 Marks the entity's own workbook in yellow (Draft Financial Statements output)
+  excel_generator.py           Review Points Sheet workbook (FRRB Technical Review layout)
+  pdf_extractor.py             Reads Excel workbooks and text-based PDFs; detects scanned PDFs
+  applicability.py             Sidebar profile validation (Companies (Ind AS) Rules, 2015; Schedule III)
+  frrb_library.py              ICAI FRRB precedents shown in the Technical Reference Library tab
+  rules_engine.py, ai_analyzer.py, schedule_iii_viewer.py, reference_matcher.py
+                               Earlier versions, not used by the application (kept for reference and their unit tests)
+knowledge_base/
+  standards_paragraphs.json    Paragraph-level text of the notified Ind AS and AS
+sample_data/                   Sample draft statements and annual reports (Excel and PDF)
+tests/                         Unit tests
+requirements.txt
 ```
 
 ---
 
-## 🚀 Installation & Application Startup
+## Installation
 
-### 1. Prerequisites
-- Python 3.10, 3.11, 3.12, 3.13, or 3.14
-- Operating System: Windows, macOS, or Linux
-
-### 2. Install Dependencies
-Open PowerShell or your command prompt in the project root directory and run:
+Requires Python 3.10 or later.
 
 ```powershell
 pip install -r requirements.txt
-```
-
-### 3. Launch the Web Application
-Run the following command:
-
-```powershell
 streamlit run app.py
 ```
 
-Streamlit will launch local server and automatically open the application in your default web browser at:
-`http://localhost:8501`
+The application opens at `http://localhost:8501`.
+
+To enable the optional AI review, enter a Gemini API key in the sidebar under **AI Model Configuration**, or set it before
+launching:
+
+```powershell
+$env:GEMINI_API_KEY="your-gemini-api-key"
+streamlit run app.py
+```
 
 ---
 
-## ⚙️ Configuration & AI Setup
+## Using the application
 
-### Optional Gemini API Key Setup
-The application is designed to be fully operational out-of-the-box without requiring an external API key. However, to enable live Google Gemini analysis:
-- **Option 1 (Interactive UI)**: Enter your key in the sidebar under `🤖 AI Model Configuration`. It remains strictly in your session state and is never saved to disk.
-- **Option 2 (Environment Variable)**: Set `GEMINI_API_KEY` before launching:
-  ```powershell
-  $env:GEMINI_API_KEY="your-gemini-api-key-here"
-  streamlit run app.py
-  ```
+1. **Sidebar** - select the entity profile (company type, listing status, framework, Schedule III division, financial year).
+   The sidebar validates the combination (for example, a listed company cannot report under AS / Division I).
+2. **Select review mode** - Option A (draft statements before finalisation) or Option B (published annual report).
+3. **Output Required** - choose the Review Points Sheet or the Draft Financial Statements (Yellow Highlights).
+4. **Upload** the financial statements (Excel `.xlsx` / `.xlsm`, or a text-based PDF).
+5. Review the **entity profile detected from the financial statements** and confirm it.
+6. Click **Run FRRB Compliance Review**.
+7. Review the observations (filter by nature, search), the **Checks & applicability** tab, and download the Excel output.
 
----
-
-## ⏱️ 10–15 Minute Demonstration Guide
-
-Follow these sequential steps to demonstrate the application to fellow Chartered Accountants, partners, or review committees:
-
-### Step 1: Demonstrate Entity Applicability Assessment (2 Minutes)
-1. In the sidebar under **Entity Applicability Profile**, select:
-   - `Company Type`: **Public Company**
-   - `Listing Status`: **Listed**
-   - `Financial Reporting Framework`: Select **Accounting Standards (AS)**
-   - `Schedule III Division`: Select **Division I**
-2. Notice the real-time **Statutory Violation Alert**:
-   > *“Statutory Violation: Under Rule 4(1)(iii)(a) of Companies (Ind AS) Rules, 2015, any company whose equity or debt securities are listed MUST prepare financial statements under Ind AS framework.”*
-3. Now correct the selection:
-   - `Framework`: **Indian Accounting Standards (Ind AS)**
-   - `Schedule III Division`: **Division II**
-4. Observe the green confirmation badge: `✓ Profile Status: Compliant & Valid`.
+### Demonstration with the sample files
+- `sample_data/Sample_Draft_FS_Option_A.xlsx` - a Balance Sheet that does not balance (total assets 11,060 vs total equity
+  and liabilities 10,810), together with disclosure gaps that apply to the figures presented (trade payables ageing, CWIP
+  ageing, promoter shareholding).
+- `sample_data/Sample_Compliant_FS_Negative_Test.xlsx` - largely compliant statements; the only point raised is that a cash
+  flow statement was not located in the uploaded file (classified as *Requires verification*).
 
 ---
 
-### Step 2: Demonstrate Review Mode Option A — Draft Financial Statements (4 Minutes)
-1. Click **Option A: Financial Statements Review Before Finalisation**.
-2. Under **Or Load Demonstration Samples**, select:
-   - `Sample 1: Draft FS with Errors (Option A Demo)`
-   - Click **Load Selected Sample PDF**.
-3. Expand **📄 Document Diagnostics & Section Detection**:
-   - Verify page count (3 pages) and automatic identification of *Balance Sheet*, *Profit & Loss*, and *Notes to Accounts*.
-4. Click **🚀 Run FRRB Compliance Review**:
-   - Review the **KPI Cards**: Highlights Total Observations, High Risk, Medium Risk, and Low Risk items.
-   - Inspect the detected findings:
-     - **Arithmetic Integrity Check**: Detects that Total Assets (₹11,060 Lakhs) does not match Total Equity & Liabilities (₹10,810 Lakhs).
-     - **Cash Flow Reconciliation**: Flags closing cash discrepancy between CFS and Note 9.
-     - **Ind AS 16 PPE Policy**: Catches legacy *"standard of performance"* wording and cites Ind AS 16.7/16.13.
-     - **Schedule III Trade Payables Ageing**: Flags missing MCA mandatory ageing schedule and Section 22 MSMED Act disclosures.
-     - **Schedule III Mandatory Ratios**: Flags ratio variances >25% without required explanatory footnotes.
-5. Click **⬇️ Download Pre_Finalisation_Issue_Log_FY_2023-24.xlsx**:
-   - Open in Excel:
-     - **Worksheet 1 (Issue Log)**: Displays the mandatory 8 columns (`Issue ID`, `Financial statement or note reference`, `Description of the issue`, `Current reference or existing disclosure`, `Correct reference or suggested correction`, `Applicable accounting standard, Schedule III requirement or statutory provision`, `Recommended action`, `Status of the issue`).
-     - **Worksheet 2 (Financial Statements Marked)**: Shows draft financial statement line items with **YELLOW HIGHLIGHTED CELLS** pointing out items requiring modifications before finalisation.
+## Scope and limitations
+
+- **Excel workbooks** receive the full set of cross-verification checks. **PDF annual reports** are read and reviewed, but
+  amounts are less reliably extracted from PDF layouts, so fewer cross-checks can be performed; scanned (image) PDFs are not
+  supported.
+- The assistant supports, and does not replace, the reviewer's professional judgement. Observations classified as
+  *Potential concern* or *Requires verification* call for follow-up rather than a conclusion.
+- The Draft Financial Statements output may take several seconds for large workbooks (for example, workbooks with many links
+  to other workbooks).
 
 ---
 
-### Step 3: Demonstrate Review Mode Option B — Annual Report Red Flags (4 Minutes)
-1. Click **Option B: Annual Report Review & Red-Flag Identification**.
-2. Under **Load Demonstration Samples**, select:
-   - `Sample 2: Published Annual Report with Red Flags (Option B Demo)`
-   - Click **Load Selected Sample PDF**.
-3. Click **🚀 Run FRRB Compliance Review**:
-   - Inspect findings:
-     - **Auditor's Report Review**: Detects *“Basis for Qualified Opinion”* on unverified inventory under SA 705 / Section 143(2).
-     - **CARO 2020 Clause 3(ii)(b)**: Flags reported discrepancies between quarterly statements submitted to banks and financial books.
-     - **Auditor's Emphasis of Matter**: Flags unprovisioned GST tax litigation.
-     - **Ind AS 109 / Related Parties**: Identifies corporate guarantee given without fair value recognition.
-4. Click **⬇️ Download FRRB_Annual_Report_RedFlag_Register_FY_2023-24.xlsx**:
-   - Open in Excel:
-     - **Worksheet 1 (Red-Flag & Findings Register)**: Structured table with risk color coding (High: Soft Red, Medium: Soft Orange, Low: Soft Green).
-     - **Worksheet 2 (Executive Summary & Analytics)**: Scorecard breakdown by risk rating and statutory category.
-
----
-
-### Step 4: Demonstrate Negative Testing (Zero False Positives) (2 Minutes)
-1. Switch to `Sample 3: Clean Compliant FS (Negative Test - Zero False Positives)`.
-2. Click **Load Selected Sample PDF** and click **Run FRRB Compliance Review**.
-3. Verify that the application displays:
-   > *“🎉 Compliant! No financial reporting non-compliances, arithmetic discrepancies, or disclosure deficiencies detected.”*
-4. Confirms that compliant disclosures are not falsely flagged.
-
----
-
-### Step 5: Explore the Technical Reference Library (1 Minute)
-1. Navigate to the **📚 Technical Reference Library** tab in the main interface.
-2. Search and review authentic ICAI FRRB precedents compiled from the official ICAI publication:
-   - Ind AS 16 subsequent cost principles
-   - Schedule III Trade Payables MSME ageing rules
-   - Schedule III Ratio variance explanation rules
-   - CARO 2020 Clause 3(ii)(b) quarterly bank returns reconciliation rules.
-
----
-
-## 🧪 Running Automated Unit & Integration Tests
-
-To run the complete test suite:
+## Tests
 
 ```powershell
 python -m unittest discover tests
 ```
 
-Expected output:
-```
-Ran 13 tests in 0.25s
-OK
-```
-
-All 13 automated tests verify:
-- Statutory applicability logic (Listed vs Unlisted, AS vs Ind AS, NBFC rules)
-- Text-based vs scanned PDF detection
-- Arithmetic discrepancy detection
-- Schedule III compliance checks
-- Both review modes (Option A vs Option B)
-- Excel 8-column structure and yellow cell highlighting
-- Negative test cases ensuring zero false positives on compliant financial statements.
+17 tests covering the profile validation rules, document extraction and scanned-PDF detection, the earlier rule set, and the
+Excel outputs.
