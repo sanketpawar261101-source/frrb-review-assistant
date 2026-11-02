@@ -2,6 +2,27 @@
 
 A browser-based, AI-augmented analytical application designed for **Chartered Accountants** and **Financial Reporting Review Board (FRRB)** technical reviewers. The application automates the rigorous technical audit of draft financial statements and published annual reports against **Indian Accounting Standards (Ind AS)**, **Accounting Standards (AS)**, **Schedule III** (Divisions I, II, and III), the **Companies Act, 2013**, **CARO 2020**, and authentic **ICAI FRRB** review publications.
 
+## Review methodology (evidence-based engine)
+
+The review follows the principles of an FRRB Technical Review rather than a checklist:
+
+1. **Accuracy over quantity** - an observation is raised only when a deviation is substantiated.
+2. **Applicability first** - the entity profile (framework, Schedule III division, private / public / listed from the CIN,
+   reporting date, rounding unit, small company / SMC status) is detected from the statements themselves, and every check
+   first establishes from the company's own figures whether the item exists (e.g. no CWIP -> no CWIP ageing point).
+3. **No hallucination** - every observation cites its evidence (sheet / page, row, caption, amounts); Ind AS / AS
+   requirements are quoted from the paragraph text in `knowledge_base/standards_paragraphs.json`.
+4. **No checklist observations** - absence of "negative statements" (benami, crypto, wilful defaulter, struck-off, layers)
+   is not reported.
+5. **Holistic cross-checks** - face vs notes, ratio table vs workings, related-party note vs balances, ageing vs other notes,
+   deferred tax movement, EPS recomputation, stale periods and formula errors.
+6. **Classification** - Non-compliance, Inconsistency, Disclosure gap, Potential concern, Requires verification.
+
+Core modules: `core/fs_model.py` (structured statements + detected profile), `core/review_engine.py` (checks and
+applicability log), `core/ai_reviewer.py` (optional Gemini review; quotes and amounts are verified against the document and
+unsupported items are rejected), `core/reference_matcher.py` (tags observations as "Previously identified" or "New" against
+an uploaded reference sheet / TR report), `core/fs_marker.py` (marks the entity's own workbook in yellow).
+
 ---
 
 ## 🌟 Key Capabilities

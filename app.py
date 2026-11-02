@@ -12,11 +12,12 @@ import pandas as pd
 from core.applicability import ApplicabilityEngine
 from core.frrb_library import FRRBLibrary
 from core.pdf_extractor import PDFExtractor
-from core.rules_engine import ComplianceEngine
-from core.ai_analyzer import AIAnalyzer
 from core.excel_generator import ExcelReportGenerator
-from core.knowledge_base import KnowledgeBase
 from core.fs_marker import DraftFSMarker
+from core.fs_model import FSModel
+from core.review_engine import ReviewEngine, NATURES
+from core.ai_reviewer import AIReviewer
+from core.reference_matcher import ReferenceMatcher
 
 
 # Page configuration
@@ -333,104 +334,126 @@ if doc:
             st.table(pd.DataFrame(sec_info))
 
 
+st.markdown("#### 📑 Reference / Previously Identified Observations (optional)")
+reference_file = st.file_uploader(
+    "Upload an earlier review points sheet, TR report or list of known observations (Excel / PDF / Word)",
+    type=["xlsx", "xlsm", "pdf", "docx"],
+    key="reference_upload",
+    help="Each new observation will be tagged 'Previously identified' or 'New', so genuinely new matters stand out."
+)
+
+
 # -----------------------------------------------------------------------------
-# EXECUTION: RUN FRRB COMPLIANCE AUDIT
+# ENTITY PROFILE DETECTED FROM THE FINANCIAL STATEMENTS
+# -----------------------------------------------------------------------------
+fs_model = None
+if doc and doc.get("success") and st.session_state.get("source_bytes"):
+    if st.session_state.get("fs_model_for") != st.session_state.current_filename:
+        st.session_state.fs_model = FSModel.from_bytes(st.session_state.source_bytes, st.session_state.current_filename, doc.get("pages"))
+        st.session_state.fs_model_for = st.session_state.current_filename
+    fs_model = st.session_state.fs_model
+
+sidebar_profile = {
+    "company_type": company_type,
+    "listing_status": listing_status,
+    "listed": listing_status == "Listed",
+    "framework": framework,
+    "schedule_iii_division": schedule_iii_division,
+    "financial_year": financial_year,
+    "statement_type": statement_type,
+}
+effective_profile = dict(sidebar_profile)
+
+if fs_model is not None:
+    detected = fs_model.profile
+    with st.expander("🔎 Entity profile detected from the financial statements", expanded=True):
+        rows, mismatches = [], []
+        for key, label in [("company_type", "Company type"), ("framework", "Framework"), ("schedule_iii_division", "Schedule III division"),
+                           ("financial_year", "Financial year")]:
+            d = detected.get(key)
+            s = sidebar_profile.get(key)
+            rows.append({"Attribute": label, "Detected from statements": d or "—", "Sidebar selection": s})
+            if d and s and d != s:
+                mismatches.append(label)
+        listed_d = detected.get("listed")
+        rows.append({"Attribute": "Listed", "Detected from statements": ("Yes" if listed_d else "No") if listed_d is not None else "—",
+                     "Sidebar selection": listing_status})
+        if listed_d is not None and listed_d != (listing_status == "Listed"):
+            mismatches.append("Listing status")
+        rows.append({"Attribute": "CIN", "Detected from statements": detected.get("cin", "—"), "Sidebar selection": "—"})
+        rows.append({"Attribute": "Amounts", "Detected from statements": detected.get("unit", "—"), "Sidebar selection": "—"})
+        if "small_company" in detected:
+            rows.append({"Attribute": "Small company (Sec 2(85)) / SMC", "Detected from statements":
+                         f"{'Yes' if detected['small_company'] else 'No'} / {'Yes' if detected.get('smc') else 'No'}", "Sidebar selection": "—"})
+        st.table(pd.DataFrame(rows))
+        use_detected = st.checkbox("Use the profile detected from the financial statements (recommended)", value=True,
+                                   help="Applicability of every check is decided on this profile.")
+        if mismatches:
+            st.warning(f"The sidebar selection differs from the statements for: {', '.join(mismatches)}. "
+                       + ("The detected profile will be used." if use_detected else "The sidebar profile will be used."))
+    if use_detected:
+        for key in ("company_type", "framework", "schedule_iii_division", "financial_year"):
+            if detected.get(key):
+                effective_profile[key] = detected[key]
+        if detected.get("listed") is not None:
+            effective_profile["listed"] = detected["listed"]
+            effective_profile["listing_status"] = "Listed" if detected["listed"] else "Unlisted"
+    for key in ("cin", "unit", "small_company", "smc", "one_person_company", "turnover_rs", "paid_up_capital_rs"):
+        if key in detected:
+            effective_profile[key] = detected[key]
+
+
+# -----------------------------------------------------------------------------
+# EXECUTION: RUN FRRB REVIEW
 # -----------------------------------------------------------------------------
 st.markdown("### 3. Review Execution")
 
 run_audit_col, info_col = st.columns([1, 2])
 
 with run_audit_col:
-    run_btn = st.button("🚀 Run FRRB Compliance Review", type="primary", use_container_width=True, disabled=(doc is None or not doc.get("success", False)))
+    run_btn = st.button("🚀 Run FRRB Compliance Review", type="primary", use_container_width=True, disabled=(fs_model is None))
 
 with info_col:
     if doc and doc.get("success"):
         st.markdown(f"**Active Document:** `{doc['filename']}` ({doc['total_pages']} sheets/sections)")
     else:
-        st.caption("Upload an Excel financial statement workbook above to enable review.")
+        st.caption("Upload the financial statements above to enable review.")
 
-if run_btn and doc and doc.get("success"):
-    with st.spinner("Executing FRRB compliance procedures, arithmetic checks, and Schedule III validations..."):
-        # 1. Deterministic Rule-Based Engine
-        profile_data = {
-            "company_type": company_type,
-            "listing_status": listing_status,
-            "framework": framework,
-            "schedule_iii_division": schedule_iii_division,
-            "financial_year": financial_year,
-            "statement_type": statement_type,
-        }
-        rule_findings = ComplianceEngine.run_review(doc, profile_data, review_mode=review_mode)
-
-        # 2. AI Analyzer (Gemini / Offline CA Engine) across full document
-        ai_resp = AIAnalyzer.analyze_full_document(
-            doc=doc,
-            profile=profile_data,
-            review_mode=review_mode,
-            api_key=gemini_key_input
-        )
-
-        # 3. Merge and Deduplicate AI findings with rule findings strictly by unique rule_code
-        combined_issues = list(rule_findings["issues"])
-        seen_rule_codes = {i.get("rule_code") for i in combined_issues if i.get("rule_code")}
-        seen_topics = {(i.get("ref", "").strip().lower(), i.get("category", "").strip().lower()) for i in combined_issues}
-        start_idx = len(combined_issues) + 1
-
-        for ai_item in ai_resp.get("findings", []):
-            ai_code = ai_item.get("rule_code", "")
-            # Check if this rule_code already ran in deterministic rules
-            if ai_code and ai_code in seen_rule_codes:
-                continue
-
-            # Check if identical note ref and category already reported
-            ref_topic = (ai_item.get("ref", "").strip().lower(), ai_item.get("category", "").strip().lower())
-            if ref_topic in seen_topics and ai_item.get("category") != "General":
-                continue
-
-            if ai_code:
-                seen_rule_codes.add(ai_code)
-            seen_topics.add(ref_topic)
-
-            combined_issues.append({
-                "issue_id": f"FRR-{review_mode[-1]}-{start_idx:03d}",
-                "rule_code": ai_code or f"AI-OBS-{start_idx:03d}",
-                "category": ai_item.get("category", "Disclosures & Notes"),
-                "ref": ai_item.get("ref", "Notes to Accounts"),
-                "description": ai_item.get("description", ""),
-                "current_disclosure": ai_item.get("extract", "Disclosed in financial statements"),
-                "evidence": ai_item.get("extract", "Disclosed in financial statements"),
-                "suggested_correction": ai_item.get("suggested_correction", ""),
-                "statutory_ref": ai_item.get("technical_ref", "Reference Verification Required"),
-                "action": ai_item.get("suggested_correction", ""),
-                "status": ai_item.get("nature", "Disclosure Deficiency"),
-                "risk": ai_item.get("risk", "Medium"),
-                "highlight_cells": [ai_item.get("ref", "Note")]
-            })
-            start_idx += 1
-
-        # Ground every finding in the knowledge base (verified citation + source requirement text)
-        combined_issues = [KnowledgeBase.enrich_issue(x, profile_data) for x in combined_issues]
-
-        # Recompute totals
-        high_cnt = sum(1 for x in combined_issues if x.get("risk") == "High")
-        med_cnt = sum(1 for x in combined_issues if x.get("risk") == "Medium")
-        low_cnt = sum(1 for x in combined_issues if x.get("risk") == "Low")
-
-        cat_break = {}
-        for x in combined_issues:
-            cat = x.get("category", "General")
-            cat_break[cat] = cat_break.get(cat, 0) + 1
+if run_btn and fs_model is not None:
+    with st.spinner("Establishing applicability and verifying the financial statements..."):
+        engine_out = ReviewEngine(fs_model, effective_profile).run()
+        findings = engine_out["findings"]
+        ai_note, rejected = "Evidence-based review engine (no AI)", []
+        if gemini_key_input:
+            try:
+                ai_findings, rejected = AIReviewer.review(fs_model, effective_profile, findings, engine_out["checks"], gemini_key_input)
+                findings = findings + ai_findings
+                ai_note = f"Review engine + Gemini ({len(ai_findings)} AI observation(s) accepted, {len(rejected)} rejected by evidence validation)"
+            except Exception as exc:
+                ai_note = f"Review engine only - Gemini call failed: {str(exc)[:120]}"
+        order = {n: i for i, n in enumerate(NATURES)}
+        findings.sort(key=lambda f: (order.get(f.get("nature"), 9), {"High": 0, "Medium": 1, "Low": 2}.get(f.get("significance"), 3)))
+        for i, f in enumerate(findings, start=1):
+            f["issue_id"] = f"OBS-{i:02d}"
+        reference_count = 0
+        if reference_file is not None:
+            references = ReferenceMatcher.extract(reference_file.getvalue(), reference_file.name)
+            reference_count = len(references)
+            ReferenceMatcher.tag(findings, references)
 
         st.session_state.audit_results = {
             "review_mode": review_mode,
-            "profile": profile_data,
-            "total_issues": len(combined_issues),
-            "high_risk_count": high_cnt,
-            "med_risk_count": med_cnt,
-            "low_risk_count": low_cnt,
-            "categories_breakdown": cat_break,
-            "issues": combined_issues,
-            "ai_source": ai_resp.get("source", "Standard Engine"),
+            "profile": effective_profile,
+            "total_issues": len(findings),
+            "high_risk_count": sum(1 for x in findings if x.get("significance") == "High"),
+            "med_risk_count": sum(1 for x in findings if x.get("significance") == "Medium"),
+            "low_risk_count": sum(1 for x in findings if x.get("significance") == "Low"),
+            "categories_breakdown": {n: sum(1 for x in findings if x.get("nature") == n) for n in NATURES},
+            "issues": findings,
+            "checks": engine_out["checks"],
+            "rejected_ai": rejected,
+            "reference_count": reference_count,
+            "ai_source": ai_note,
         }
 
 
@@ -525,163 +548,131 @@ if results:
                 st.dataframe(pd.DataFrame(fs_changes), use_container_width=True)
 
     # =========================================================================
-    # VIEW B: FINANCIAL REPORTING REVIEW POINTS SHEET
+    # VIEW B: FINANCIAL REPORTING REVIEW POINTS SHEET (FRRB TECHNICAL REVIEW FORMAT)
     # =========================================================================
     else:
+        prof = results["profile"]
         st.markdown(f"""
         <div style="background-color: #F0FDF4; border-left: 5px solid #16A34A; padding: 14px 18px; border-radius: 6px; margin-bottom: 18px;">
             <b style="color: #166534; font-size: 1.05rem;">📋 Financial Reporting Review Points Sheet</b><br/>
             <span style="color: #14532D; font-size: 0.9rem;">
-            Comprehensive technical review points sheet identifying reporting deficiencies, Schedule III disclosure gaps,
-            CARO 2020 remarks, and auditor modifications with exact statutory citations and risk ratings.
+            Only evidence-based observations are reported. Applicability of every check was first established from the financial statements
+            ({html.escape(str(prof.get('framework')))}, {html.escape(str(prof.get('schedule_iii_division')))}, {html.escape(str(prof.get('financial_year')))});
+            checks that do not apply are listed under <b>Checks &amp; applicability</b>, not reported as observations.
+            Source: {html.escape(results.get('ai_source', ''))}.
             </span>
         </div>
         """, unsafe_allow_html=True)
 
-        # KPI Scorecard
-        kpi_cols = st.columns(4)
+        nature_colors = {"Non-compliance": "#DC2626", "Inconsistency": "#C2410C", "Disclosure gap": "#D97706",
+                         "Potential concern": "#2563EB", "Requires verification": "#64748B"}
+        kpi_cols = st.columns(len(NATURES) + 1)
         with kpi_cols[0]:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-num" style="color: #0B2F4C;">{results['total_issues']}</div>
-                <div class="metric-label">Total Observations</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with kpi_cols[1]:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-num" style="color: #DC2626;">{results['high_risk_count']}</div>
-                <div class="metric-label">High Risk / Statutory</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with kpi_cols[2]:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-num" style="color: #D97706;">{results['med_risk_count']}</div>
-                <div class="metric-label">Medium Risk / Standards</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with kpi_cols[3]:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-num" style="color: #16A34A;">{results['low_risk_count']}</div>
-                <div class="metric-label">Low Risk / Presentation</div>
-            </div>
-            """, unsafe_allow_html=True)
-
+            st.markdown(f"""<div class="metric-card"><div class="metric-num" style="color:#0B2F4C;">{results['total_issues']}</div>
+            <div class="metric-label">Observations</div></div>""", unsafe_allow_html=True)
+        for col, n in zip(kpi_cols[1:], NATURES):
+            with col:
+                st.markdown(f"""<div class="metric-card"><div class="metric-num" style="color:{nature_colors[n]};">{results['categories_breakdown'].get(n, 0)}</div>
+                <div class="metric-label">{n}</div></div>""", unsafe_allow_html=True)
         st.markdown("<br/>", unsafe_allow_html=True)
 
-        # Download Button for Review Points Sheet
         rp_col1, rp_col2 = st.columns([2, 1])
         with rp_col1:
-            st.write(
-                "**Downloadable Review Points Sheet:** Includes the mandatory **8-Column Issue Log (Sheet 1)** "
-                "with exact statutory references and **Executive Summary & Risk Analytics Dashboard (Sheet 2)**."
-            )
-            rp_excel_bytes = ExcelReportGenerator.generate_review_points_workbook(
-                issues=results["issues"],
-                profile=results["profile"],
-                summary_stats=results,
-                review_mode=results["review_mode"]
-            )
-            rp_filename = f"Financial_Reporting_Review_Points_Sheet_{financial_year.replace(' ', '_')}.xlsx"
-
+            st.write("**Downloadable Review Points Sheet** in the FRRB Technical Review layout (Title, Sub Title, View of the Reviewer, "
+                     "Matter contained in the financial statements, Exact technical requirement), with the applicability log and detected profile.")
+            if results.get("reference_count"):
+                st.caption(f"Compared with {results['reference_count']} reference observation(s) uploaded.")
         with rp_col2:
             st.download_button(
                 label="⬇️ Download Review Points Sheet (.xlsx)",
-                data=rp_excel_bytes,
-                file_name=rp_filename,
+                data=ExcelReportGenerator.generate_tr_workbook(results["issues"], results.get("checks", []), prof,
+                                                              entity_name=os.path.splitext(st.session_state.get("current_filename") or "")[0]),
+                file_name=f"Financial_Reporting_Review_Points_{str(prof.get('financial_year', financial_year)).replace(' ', '_')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 use_container_width=True
             )
 
         st.markdown("---")
-
-        tab_findings, tab_summary, tab_library = st.tabs([
-            "📋 Detailed Findings Register",
-            "📊 Category Breakdown",
+        tab_findings, tab_checks, tab_library = st.tabs([
+            "📋 Observations",
+            "✅ Checks & applicability",
             "📚 Technical Reference Library"
         ])
 
         with tab_findings:
-            filter_col1, filter_col2 = st.columns([1, 2])
-            with filter_col1:
-                risk_filter = st.selectbox("Filter by Risk Rating", ["All", "High", "Medium", "Low"])
-            with filter_col2:
-                search_query = st.text_input("Search issues by keyword (e.g. MSME, PPE, Ratios, CARO)", "")
+            f1, f2, f3 = st.columns([1, 1, 2])
+            with f1:
+                nature_filter = st.selectbox("Nature", ["All"] + NATURES)
+            with f2:
+                ref_filter = st.selectbox("Reference status", ["All", "New", "Previously identified"])
+            with f3:
+                search_query = st.text_input("Search (e.g. ratio, related party, cash flow)", "")
 
-            filtered_issues = results["issues"]
-            if risk_filter != "All":
-                filtered_issues = [i for i in filtered_issues if i.get("risk") == risk_filter]
+            shown = results["issues"]
+            if nature_filter != "All":
+                shown = [i for i in shown if i.get("nature") == nature_filter]
+            if ref_filter != "All":
+                shown = [i for i in shown if i.get("reference_status", "New").startswith(ref_filter)]
             if search_query.strip():
-                sq = search_query.strip().lower()
-                filtered_issues = [
-                    i for i in filtered_issues
-                    if sq in i.get("description", "").lower() or sq in i.get("ref", "").lower() or sq in i.get("statutory_ref", "").lower()
-                ]
+                q = search_query.strip().lower()
+                shown = [i for i in shown if q in (i.get("view", "") + i.get("sub_title", "") + i.get("title", "") + i.get("matter", "")).lower()]
 
-            if not filtered_issues:
+            if not shown:
                 if results["total_issues"] == 0:
-                    st.success("🎉 Compliant! No financial reporting non-compliances, arithmetic discrepancies, or disclosure deficiencies detected.")
+                    st.success("No substantiated observations. See 'Checks & applicability' for the procedures performed.")
                 else:
-                    st.info("No issues matched your filter criteria.")
+                    st.info("No observations match the filters.")
 
-            for issue in filtered_issues:
-                risk_level = issue.get("risk", "Medium")
-                badge_class = "badge-high" if risk_level == "High" else "badge-med" if risk_level == "Medium" else "badge-low"
-
+            for issue in shown:
+                color = nature_colors.get(issue.get("nature"), "#64748B")
+                evidence_html = "".join(f"<li>{html.escape(str(e.get('text', '')))}</li>" for e in issue.get("evidence", [])[:8])
                 req_html = "".join(
-                    f"<div style='margin-top:4px;'><b>{html.escape(p['ref'])}:</b> {html.escape(p['text'][:600])}{'…' if len(p['text']) > 600 else ''}</div>"
+                    f"<div style='margin-top:4px;'><b>{html.escape(p['ref'])}:</b> {html.escape(p['text'][:700])}{'…' if len(p['text']) > 700 else ''}</div>"
                     for p in issue.get("source_requirements", [])
-                )
-                req_block = (
-                    f"<div style='background-color:#EEF2FF; color:#1E1B4B; padding:8px 12px; border-radius:4px; font-size:0.85rem; margin-top:8px;'>"
-                    f"<b>Requirement as per the Standard (source text):</b>{req_html}</div>"
-                ) if req_html else ""
-
-                with st.container():
-                    st.markdown(f"""
-                    <div style="border: 1px solid #CBD5E1; border-radius: 8px; padding: 16px; margin-bottom: 14px; background-color: #FFFFFF; color: #0F172A;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 12px;">
-                            <span style="font-weight: 700; color: #1F4E79; font-size: 1.05rem;">{issue.get('issue_id')} — {html.escape(issue.get('description', ''))}</span>
-                            <span class="{badge_class}">{risk_level} Risk</span>
-                        </div>
-                        <div style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">
-                            <b>Area:</b> {html.escape(issue.get('category', ''))} | <b>FS / Note reference:</b> {html.escape(issue.get('ref', ''))} | <b>Nature:</b> {html.escape(str(issue.get('status', '')))}
-                        </div>
-                        <div style="background-color: #F1F5F9; color: #0F172A; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; margin-bottom: 8px;">
-                            <b>Observation (as presented in draft):</b><br/>{html.escape(str(issue.get('current_disclosure', issue.get('evidence', 'N/A'))))}
-                        </div>
-                        <div class="correction-box" style="color: #422006;">
-                            <b>Suggested correction / disclosure:</b><br/>{html.escape(str(issue.get('suggested_correction', issue.get('action', 'N/A'))))}
-                        </div>
-                        <div style="font-size: 0.85rem; color: #334155; margin-top: 6px;">
-                            <b>Reference:</b> <span style="background-color: #EDE9FE; color: #3B0764; padding: 2px 6px; border-radius: 4px;">{html.escape(issue.get('statutory_ref', 'Reference Verification Required'))}</span>
-                        </div>
-                        {req_block}
+                ) or html.escape(issue.get("statutory_ref", ""))
+                ref_status = issue.get("reference_status")
+                ref_badge = (f"<span style='background:#E0E7FF;color:#3730A3;padding:3px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px;'>"
+                             f"{html.escape(ref_status)}</span>") if ref_status else ""
+                st.markdown(f"""
+                <div style="border: 1px solid #CBD5E1; border-left: 5px solid {color}; border-radius: 8px; padding: 16px; margin-bottom: 14px; background-color: #FFFFFF; color: #0F172A;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                        <span style="font-weight:700; color:#1F4E79; font-size:1.02rem;">{issue.get('issue_id')} — {html.escape(issue.get('title', ''))} | {html.escape(issue.get('sub_title', ''))}</span>
+                        <span><span style="background:{color};color:#FFFFFF;padding:3px 10px;border-radius:10px;font-size:0.78rem;font-weight:600;">{html.escape(issue.get('nature', ''))}</span>
+                        <span style="background:#F1F5F9;color:#334155;padding:3px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px;">{html.escape(issue.get('significance', ''))} significance</span>{ref_badge}</span>
                     </div>
-                    """, unsafe_allow_html=True)
+                    <div style="margin-top:10px; font-size:0.93rem;"><b>View of the Reviewer:</b><br/>{html.escape(issue.get('view', ''))}</div>
+                    <div style="background-color:#F1F5F9; color:#0F172A; padding:8px 12px; border-radius:4px; font-size:0.88rem; margin-top:10px;">
+                        <b>Matter contained in the financial statements:</b><br/>{html.escape(issue.get('matter', ''))}
+                        <ul style="margin:6px 0 0 18px; padding:0;">{evidence_html}</ul>
+                    </div>
+                    <div style="background-color:#EEF2FF; color:#1E1B4B; padding:8px 12px; border-radius:4px; font-size:0.85rem; margin-top:8px;">
+                        <b>Exact technical requirement(s):</b>{req_html}
+                    </div>
+                    <div class="correction-box" style="color:#422006;"><b>Suggested correction:</b><br/>{html.escape(issue.get('suggested_correction', ''))}</div>
+                    <div style="font-size:0.78rem; color:#64748B;">Basis: {html.escape(issue.get('basis', ''))}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
-        with tab_summary:
-            st.markdown("#### Observations by Audit Element")
-            cat_df = pd.DataFrame([
-                {"Audit Category": k, "Number of Observations": v}
-                for k, v in results["categories_breakdown"].items()
-            ])
-            st.dataframe(cat_df, use_container_width=True)
+            if results.get("rejected_ai"):
+                with st.expander(f"AI suggestions rejected by evidence validation ({len(results['rejected_ai'])})"):
+                    for r in results["rejected_ai"]:
+                        st.caption(f"• {r}")
 
-            st.markdown("#### Entity Applicability Summary")
-            st.json(results["profile"])
+        with tab_checks:
+            st.markdown("#### Procedures performed and applicability")
+            st.caption("Each check first establishes, from the company's own figures, whether the item exists. "
+                       "'Not applicable' checks are not reported as observations.")
+            checks_df = pd.DataFrame(results.get("checks", []))
+            if not checks_df.empty:
+                st.dataframe(checks_df, use_container_width=True, height=min(700, 40 + 35 * len(checks_df)))
+            st.markdown("#### Entity profile used")
+            st.json({k: v for k, v in prof.items() if k not in ("turnover_rs", "paid_up_capital_rs")})
 
         with tab_library:
             st.markdown("#### ICAI FRRB Precedent & Technical Standards Library")
-            st.caption("Verbatim principles compiled from ICAI's Study on Compliance of Financial Reporting Requirements")
-            
-            precedents = FRRBLibrary.get_precedents_by_framework(framework)
+            st.caption("Principles compiled from ICAI's Study on Compliance of Financial Reporting Requirements")
+            precedents = FRRBLibrary.get_precedents_by_framework(prof.get("framework", framework))
             for p in precedents:
                 with st.expander(f"{p['id']}: {p['topic']} ({p['framework']})", expanded=False):
                     st.markdown(f"**Category:** {p['category']}")
