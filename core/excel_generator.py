@@ -79,7 +79,7 @@ class ExcelReportGenerator:
                     f"Observations: {len(findings)}")
         ws["A2"].font = cls.SUBTITLE_FONT
         headers = ["S. No.", "Title", "Sub Title", "View of the Reviewer", "Matter contained in the Financial Statements (evidence and location)",
-                   "Exact Technical Requirement(s)", "Nature", "Significance", "Basis", "Previously identified?", "Suggested correction"]
+                   "Exact Technical Requirement(s)", "Nature", "Significance", "Basis", "Suggested correction"]
         hr = 4
         for i, h in enumerate(headers, start=1):
             c = ws.cell(row=hr, column=i, value=h)
@@ -93,7 +93,7 @@ class ExcelReportGenerator:
             matter = (f.get("matter", "") + ("\n\nEvidence:\n" + evidence if evidence else "")).strip()
             reqs = "\n\n".join(f"{t['ref']}: \"{t['text']}\"" for t in f.get("source_requirements", [])) or f.get("statutory_ref", "")
             row = [n, f.get("title", ""), f.get("sub_title", ""), f.get("view", ""), matter[:32000], reqs[:32000], f.get("nature", ""),
-                   f.get("significance", ""), f.get("basis", ""), f.get("reference_status", "Not compared"), f.get("suggested_correction", "")]
+                   f.get("significance", ""), f.get("basis", ""), f.get("suggested_correction", "")]
             for i, v in enumerate(row, start=1):
                 c = ws.cell(row=r, column=i, value=v)
                 c.font, c.border = cls.REGULAR_FONT, cls.THIN_BORDER
@@ -101,11 +101,11 @@ class ExcelReportGenerator:
             ws.cell(row=r, column=7).fill = nature_fill.get(f.get("nature"), cls.LOW_RISK_FILL)
             ws.cell(row=r, column=7).font = cls.BOLD_FONT
             r += 1
-        for i, w in enumerate([7, 22, 22, 55, 55, 55, 15, 12, 20, 18, 40], start=1):
+        for i, w in enumerate([7, 22, 22, 55, 55, 55, 15, 12, 20, 40], start=1):
             ws.column_dimensions[get_column_letter(i)].width = w
         ws.row_dimensions[hr].height = 40
         ws.freeze_panes = ws.cell(row=hr + 1, column=4)
-        ws.auto_filter.ref = f"A{hr}:K{max(r - 1, hr)}"
+        ws.auto_filter.ref = f"A{hr}:J{max(r - 1, hr)}"
 
         wc = wb.create_sheet("Checks & Applicability")
         wc["A1"] = "CHECKS PERFORMED - APPLICABILITY ESTABLISHED FROM THE FINANCIAL STATEMENTS"
