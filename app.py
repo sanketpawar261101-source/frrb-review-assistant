@@ -6,9 +6,34 @@ and generates audit-grade Excel reports with yellow cell highlighting.
 """
 
 import html
+import importlib
 import os
+import sys
 import streamlit as st
 import pandas as pd
+
+
+def _refresh_core_modules() -> None:
+    """Re-imports core modules whose source changed since they were loaded.
+
+    Streamlit re-executes app.py after a redeploy but keeps already-imported modules in memory,
+    so without this an updated core/*.py would not take effect until the app is rebooted.
+    """
+    order = ["core.knowledge_base", "core.fs_model", "core.review_engine", "core.ai_reviewer",
+             "core.excel_generator", "core.fs_marker", "core.pdf_extractor", "core.applicability", "core.frrb_library"]
+    for name in order:
+        mod = sys.modules.get(name)
+        path = getattr(mod, "__file__", None)
+        if mod is None or not path or not os.path.exists(path):
+            continue
+        mtime = os.path.getmtime(path)
+        if getattr(mod, "_source_mtime", None) != mtime:
+            mod = importlib.reload(mod)
+            mod._source_mtime = mtime
+
+
+_refresh_core_modules()
+
 from core.applicability import ApplicabilityEngine
 from core.frrb_library import FRRBLibrary
 from core.pdf_extractor import PDFExtractor
@@ -17,7 +42,6 @@ from core.fs_marker import DraftFSMarker
 from core.fs_model import FSModel
 from core.review_engine import ReviewEngine, NATURES
 from core.ai_reviewer import AIReviewer
-from core.reference_matcher import ReferenceMatcher
 
 
 # Page configuration
@@ -334,14 +358,6 @@ if doc:
             st.table(pd.DataFrame(sec_info))
 
 
-st.markdown("#### 📑 Reference / Previously Identified Observations (optional)")
-reference_file = st.file_uploader(
-    "Upload an earlier review points sheet, TR report or list of known observations (Excel / PDF / Word)",
-    type=["xlsx", "xlsm", "pdf", "docx"],
-    key="reference_upload",
-    help="Each new observation will be tagged 'Previously identified' or 'New', so genuinely new matters stand out."
-)
-
 
 # -----------------------------------------------------------------------------
 # ENTITY PROFILE DETECTED FROM THE FINANCIAL STATEMENTS
@@ -435,11 +451,6 @@ if run_btn and fs_model is not None:
         findings.sort(key=lambda f: (order.get(f.get("nature"), 9), {"High": 0, "Medium": 1, "Low": 2}.get(f.get("significance"), 3)))
         for i, f in enumerate(findings, start=1):
             f["issue_id"] = f"OBS-{i:02d}"
-        reference_count = 0
-        if reference_file is not None:
-            references = ReferenceMatcher.extract(reference_file.getvalue(), reference_file.name)
-            reference_count = len(references)
-            ReferenceMatcher.tag(findings, references)
 
         st.session_state.audit_results = {
             "review_mode": review_mode,
@@ -452,7 +463,6 @@ if run_btn and fs_model is not None:
             "issues": findings,
             "checks": engine_out["checks"],
             "rejected_ai": rejected,
-            "reference_count": reference_count,
             "ai_source": ai_note,
         }
 
@@ -580,8 +590,6 @@ if results:
         with rp_col1:
             st.write("**Downloadable Review Points Sheet** in the FRRB Technical Review layout (Title, Sub Title, View of the Reviewer, "
                      "Matter contained in the financial statements, Exact technical requirement), with the applicability log and detected profile.")
-            if results.get("reference_count"):
-                st.caption(f"Compared with {results['reference_count']} reference observation(s) uploaded.")
         with rp_col2:
             st.download_button(
                 label="⬇️ Download Review Points Sheet (.xlsx)",
@@ -601,19 +609,15 @@ if results:
         ])
 
         with tab_findings:
-            f1, f2, f3 = st.columns([1, 1, 2])
+            f1, f3 = st.columns([1, 2])
             with f1:
                 nature_filter = st.selectbox("Nature", ["All"] + NATURES)
-            with f2:
-                ref_filter = st.selectbox("Reference status", ["All", "New", "Previously identified"])
             with f3:
                 search_query = st.text_input("Search (e.g. ratio, related party, cash flow)", "")
 
             shown = results["issues"]
             if nature_filter != "All":
                 shown = [i for i in shown if i.get("nature") == nature_filter]
-            if ref_filter != "All":
-                shown = [i for i in shown if i.get("reference_status", "New").startswith(ref_filter)]
             if search_query.strip():
                 q = search_query.strip().lower()
                 shown = [i for i in shown if q in (i.get("view", "") + i.get("sub_title", "") + i.get("title", "") + i.get("matter", "")).lower()]
@@ -631,15 +635,12 @@ if results:
                     f"<div style='margin-top:4px;'><b>{html.escape(p['ref'])}:</b> {html.escape(p['text'][:700])}{'…' if len(p['text']) > 700 else ''}</div>"
                     for p in issue.get("source_requirements", [])
                 ) or html.escape(issue.get("statutory_ref", ""))
-                ref_status = issue.get("reference_status")
-                ref_badge = (f"<span style='background:#E0E7FF;color:#3730A3;padding:3px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px;'>"
-                             f"{html.escape(ref_status)}</span>") if ref_status else ""
                 st.markdown(f"""
                 <div style="border: 1px solid #CBD5E1; border-left: 5px solid {color}; border-radius: 8px; padding: 16px; margin-bottom: 14px; background-color: #FFFFFF; color: #0F172A;">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
                         <span style="font-weight:700; color:#1F4E79; font-size:1.02rem;">{issue.get('issue_id')} — {html.escape(issue.get('title', ''))} | {html.escape(issue.get('sub_title', ''))}</span>
                         <span><span style="background:{color};color:#FFFFFF;padding:3px 10px;border-radius:10px;font-size:0.78rem;font-weight:600;">{html.escape(issue.get('nature', ''))}</span>
-                        <span style="background:#F1F5F9;color:#334155;padding:3px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px;">{html.escape(issue.get('significance', ''))} significance</span>{ref_badge}</span>
+                        <span style="background:#F1F5F9;color:#334155;padding:3px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px;">{html.escape(issue.get('significance', ''))} significance</span></span>
                     </div>
                     <div style="margin-top:10px; font-size:0.93rem;"><b>View of the Reviewer:</b><br/>{html.escape(issue.get('view', ''))}</div>
                     <div style="background-color:#F1F5F9; color:#0F172A; padding:8px 12px; border-radius:4px; font-size:0.88rem; margin-top:10px;">
