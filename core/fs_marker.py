@@ -436,12 +436,12 @@ class DraftFSMarker:
     @staticmethod
     def preview(marked_bytes: bytes, original_bytes: bytes) -> Dict[str, Dict[str, Any]]:
         """Grid of values + yellow flags per sheet for on-screen display (formula results taken from the original)."""
-        marked = openpyxl.load_workbook(io.BytesIO(marked_bytes))
-        cached = openpyxl.load_workbook(io.BytesIO(original_bytes), data_only=True)
+        marked = openpyxl.load_workbook(io.BytesIO(marked_bytes), keep_links=False)
+        cached = openpyxl.load_workbook(io.BytesIO(original_bytes), data_only=True, keep_links=False)
         out = {}
         for ws in marked.worksheets:
-            if ws.title == "Yellow Changes Index":
-                continue
+            if ws.title == "Yellow Changes Index" or re.search(r"trial\s*balance|\btb\b", ws.title, re.I):
+                continue                     # working sheets stay in the download but are not previewed
             src = cached[ws.title] if ws.title in cached.sheetnames else None
             grid, yellow = [], []
             for row in ws.iter_rows():

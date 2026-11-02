@@ -144,7 +144,8 @@ class PDFExtractor:
         """Extracts text and financial statement tables from an Excel (.xlsx / .xls) workbook."""
         import openpyxl
         try:
-            wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
+            # values only: skipping links to other workbooks makes loading several times faster
+            wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True, read_only=True, keep_links=False)
         except Exception as e:
             return {
                 "success": False,
@@ -163,6 +164,7 @@ class PDFExtractor:
         for idx, sheetname in enumerate(wb.sheetnames, start=1):
             ws = wb[sheetname]
             sheet_lines = [f"=== SHEET {idx}: {sheetname.upper()} ==="]
+            ws.reset_dimensions()
 
             for row in ws.iter_rows(values_only=True):
                 # Filter out empty rows
@@ -182,6 +184,7 @@ class PDFExtractor:
             })
             full_text_list.append(f"--- SHEET {idx}: {sheetname} ---\n{sheet_text}")
 
+        wb.close()
         full_text = "\n\n".join(full_text_list)
         total_pages = len(pages_data)
         avg_chars = total_chars / total_pages if total_pages > 0 else 0

@@ -47,6 +47,19 @@ class Line:
         return f"{self.loc}: \"{self.label}\"{note}{amt}{(' ' + unit) if unit and parts else ''}"
 
 
+class _Cell:
+    """Minimal cell (value, column, row, coordinate) built from streamed read-only rows."""
+    __slots__ = ("value", "column", "row")
+
+    def __init__(self, value: Any, column: int, row: int) -> None:
+        self.value, self.column, self.row = value, column, row
+
+    @property
+    def coordinate(self) -> str:
+        from openpyxl.utils import get_column_letter
+        return f"{get_column_letter(self.column)}{self.row}"
+
+
 _ENUM = re.compile(r"^\s*(?:[IVX]{1,4}\.?|\(?[a-h]\)|\(?[ivx]{1,4}\)|\(?[A-H]\)|\d{1,2}[.)]?|[-–•*])\s+")
 
 
@@ -100,14 +113,19 @@ class FSModel:
 
     def _load_excel(self, data: bytes) -> None:
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        # read-only (streaming) mode keeps memory low; links to other workbooks are not needed for reading values
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True, keep_links=False)
         chunks = []
         for ws in wb.worksheets:
             if re.search(r"trial\s*balance|\btb\b|working|mapping", ws.title, re.I):
                 continue                     # internal workings are not part of the published statements
             cy_col = py_col = note_col = None
             section = ""
-            for row in ws.iter_rows():
+            ws.reset_dimensions()            # stored sheet dimensions are often wrong; read every row
+            for r_idx, values in enumerate(ws.iter_rows(min_row=1, min_col=1, values_only=True), start=1):
+                row = [_Cell(v, c_idx, r_idx) for c_idx, v in enumerate(values, start=1)]
+                if not row:
+                    continue
                 cells = [c for c in row if c.value is not None and str(c.value).strip() != ""]
                 if not cells:
                     continue
@@ -161,6 +179,7 @@ class FSModel:
                 if label:
                     self.lines.append(Line(ws.title, row[0].row, label, cy, py, note,
                                            [n for _, n in nums], [c.value for c in cells], section))
+        wb.close()
         self.full_text = "\n".join(chunks)
 
     def _load_text_pages(self, pages: List[Dict[str, Any]]) -> None:
